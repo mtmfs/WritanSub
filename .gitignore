@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+*.egg-info/
+*.spec
+.claude/
+
+# 配置文件含 API key，不上传
+aitrans_translate.json

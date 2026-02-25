@@ -1,0 +1,29 @@
+[project]
+name = "writansub"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "torch",
+    "torchaudio",
+    "faster-whisper",
+    "numpy",
+    "pysrt",
+    "openai",
+    "cutlet",
+    "unidic-lite",
+    "pypinyin",
+    "unidecode",
+    "korean-romanizer",
+]
+
+[project.scripts]
+writansub = "writansub.gui.app:main"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
