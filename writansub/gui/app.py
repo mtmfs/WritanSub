@@ -45,6 +45,13 @@ class AItransApp:
 
 
 def main():
+    # Windows 4K/高 DPI 适配
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
     initial_media = ""
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         initial_media = sys.argv[1]
