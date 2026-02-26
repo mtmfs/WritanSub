@@ -13,7 +13,8 @@ AI 字幕处理流水线：语音识别 → 强制打轴 → AI 翻译
 ## 环境要求
 
 - Python 3.12+
-- NVIDIA 显卡 + 驱动（CPU 模式可用但很慢）
+- NVIDIA 显卡 + 驱动 ≥570（CPU 模式可用但很慢）
+  - 默认 CUDA 12.8，30/40 系如驱动低于 570 需升级驱动，或将 `pyproject.toml` 中 `cu128` 全部改为 `cu124`
 - [ffmpeg](https://ffmpeg.org/download.html)（需要在 PATH 中）
 
 ## 安装
