@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch
+torchaudio
+faster-whisper
+numpy
+pysrt
+openai
+cutlet
+unidic-lite
+pypinyin
+unidecode
+korean-romanizer

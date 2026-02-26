@@ -270,9 +270,9 @@ class PipelineTab:
                 except Exception as e:
                     self._log(f"文件处理出错: {e}")
 
-            # 释放 Whisper 模型
+            # 释放 Whisper 模型 — 保留引用以规避 CTranslate2 析构崩溃
+            _keep_alive.append(whisper_model)
             del whisper_model
-            _keep_alive.clear()
             gc.collect()
             try:
                 if torch.cuda.is_available():
