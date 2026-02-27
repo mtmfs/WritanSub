@@ -76,13 +76,19 @@ def text_to_romaji(text: str, lang: str) -> str:
 def load_audio(path: str):
     """加载音频，重采样到 16kHz，返回单声道 [1, T] Tensor。
     使用 ffmpeg 解码，支持 MP4/MKV/MP3 等任意格式。"""
+    import shutil
     import subprocess
     import numpy as np
     import torch
     from torchaudio.pipelines import MMS_FA as bundle
 
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        ffmpeg = get_ffmpeg_exe()
+
     cmd = [
-        "ffmpeg", "-i", path,
+        ffmpeg, "-i", path,
         "-f", "s16le", "-ac", "1", "-ar", str(bundle.sample_rate),
         "-loglevel", "error", "-",
     ]

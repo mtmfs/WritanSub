@@ -1,5 +1,5 @@
 {
-  "extend_end": 0.25,
+  "extend_end": 0.27,
   "extend_start": 0.1,
   "gap_threshold": 0.5,
   "min_gap": 0.25,
