@@ -18,9 +18,35 @@ from writansub.core.srt_io import parse_srt, write_srt, mark_low_align_in_review
 from writansub.core.whisper import transcribe_to_srt, _keep_alive
 from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
 from writansub.pipeline import PipelineOrchestrator
+from writansub.config import load_gui_state, save_gui_state, load_translate_config
+from writansub.core.translate import translate_srt
 from writansub.gui.widgets import (
     TextRedirector, ScrollableFrame, LogWidget, ProgressWidget, build_params_grid,
 )
+
+
+def _merge_bilingual(orig_path: str, trans_path: str, out_path: str):
+    """读取原文和译文 SRT，逐条合并为双语字幕写出"""
+    import re
+    _ENTRY = re.compile(
+        r"(\d+)\s*\n"
+        r"(\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3})\s*\n"
+        r"(.*?)(?=\n\n|\n*$)",
+        re.DOTALL,
+    )
+
+    def _parse(path):
+        with open(path, "r", encoding="utf-8-sig") as f:
+            text = f.read().strip()
+        return [(m.group(2), m.group(3).strip()) for m in _ENTRY.finditer(text)]
+
+    orig = _parse(orig_path)
+    trans = _parse(trans_path)
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        for i, (orig_entry, trans_entry) in enumerate(zip(orig, trans), 1):
+            ts = orig_entry[0]
+            f.write(f"{i}\n{ts}\n{orig_entry[1]}\n{trans_entry[1]}\n\n")
 
 
 class _PipelineSignals(QObject):
@@ -49,6 +75,8 @@ class PipelineTab(QWidget):
         self._signals.enable_start.connect(self._set_buttons_state)
 
         self._setup_ui()
+        self._connect_state_signals()
+        self.restore_state(load_gui_state())
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -137,6 +165,8 @@ class PipelineTab(QWidget):
         main_layout.addWidget(action_bar)
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
+        self._chk_translate = QCheckBox("AI 翻译")
+        action_layout.addWidget(self._chk_translate)
         action_layout.addStretch()
         self._cancel_btn = QPushButton("取消")
         self._cancel_btn.clicked.connect(self._cancel)
@@ -160,6 +190,53 @@ class PipelineTab(QWidget):
         self._log = LogWidget()
         self._log.setMinimumHeight(120)
         main_layout.addWidget(self._log, 1)
+
+    def _connect_state_signals(self):
+        self._lang_combo.currentTextChanged.connect(self._auto_save)
+        self._whisper_device_combo.currentTextChanged.connect(self._auto_save)
+        self._align_device_combo.currentTextChanged.connect(self._auto_save)
+        self._chk_cond_prev.stateChanged.connect(self._auto_save)
+        self._chk_whisper.stateChanged.connect(self._auto_save)
+        self._chk_force_align.stateChanged.connect(self._auto_save)
+        self._chk_translate.stateChanged.connect(self._auto_save)
+
+    def _auto_save(self):
+        state = load_gui_state()
+        state.update(self.save_state())
+        save_gui_state(state)
+
+    def save_state(self) -> dict:
+        return {
+            "pipeline.lang": self._lang_combo.currentText(),
+            "pipeline.whisper_device": self._whisper_device_combo.currentText(),
+            "pipeline.align_device": self._align_device_combo.currentText(),
+            "pipeline.cond_prev": self._chk_cond_prev.isChecked(),
+            "pipeline.retain_whisper": self._chk_whisper.isChecked(),
+            "pipeline.retain_align": self._chk_force_align.isChecked(),
+            "pipeline.enable_translate": self._chk_translate.isChecked(),
+            "pipeline.media_files": list(self._media_files),
+        }
+
+    def restore_state(self, state: dict):
+        if "pipeline.lang" in state:
+            self._lang_combo.setCurrentText(state["pipeline.lang"])
+        if "pipeline.whisper_device" in state:
+            self._whisper_device_combo.setCurrentText(state["pipeline.whisper_device"])
+        if "pipeline.align_device" in state:
+            self._align_device_combo.setCurrentText(state["pipeline.align_device"])
+        if "pipeline.cond_prev" in state:
+            self._chk_cond_prev.setChecked(state["pipeline.cond_prev"])
+        if "pipeline.retain_whisper" in state:
+            self._chk_whisper.setChecked(state["pipeline.retain_whisper"])
+        if "pipeline.retain_align" in state:
+            self._chk_force_align.setChecked(state["pipeline.retain_align"])
+        if "pipeline.enable_translate" in state:
+            self._chk_translate.setChecked(state["pipeline.enable_translate"])
+        if "pipeline.media_files" in state:
+            for p in state["pipeline.media_files"]:
+                if p not in self._media_files and os.path.isfile(p):
+                    self._media_files.append(p)
+                    self._file_list.addItem(os.path.basename(p))
 
     def set_media_path(self, path: str):
         """供外部（如 sys.argv）设置媒体路径"""
@@ -219,11 +296,13 @@ class PipelineTab(QWidget):
         }
         pp = {k: v.value() for k, v in self._pp_vars.items()}
         cond_prev = self._chk_cond_prev.isChecked()
+        enable_translate = self._chk_translate.isChecked()
+        translate_cfg = load_translate_config() if enable_translate else None
 
         thread = threading.Thread(
             target=self._run_pipeline,
             args=(list(self._media_files), lang, whisper_device,
-                  align_device, retention, pp, cond_prev),
+                  align_device, retention, pp, cond_prev, translate_cfg),
             daemon=True,
         )
         thread.start()
@@ -239,6 +318,7 @@ class PipelineTab(QWidget):
         whisper_device: str, align_device: str,
         retention: Dict[str, bool], pp: Dict[str, float],
         cond_prev: bool = True,
+        translate_cfg: Optional[Dict[str, str]] = None,
     ):
         import torch
 
@@ -249,12 +329,14 @@ class PipelineTab(QWidget):
         wc_threshold = pp.pop("word_conf_threshold", 0.50)
         ac_threshold = pp.pop("align_conf_threshold", 0.50)
 
+        num_phases = 3 if translate_cfg else 2
+
         try:
             total = len(media_files)
             srt_results: Dict[str, str] = {}
 
-            # ── 阶段 1/2: Whisper 语音识别 ──
-            self._log_msg("── 阶段 1/2: Whisper 语音识别 ──")
+            # ── 阶段 1: Whisper 语音识别 ──
+            self._log_msg(f"── 阶段 1/{num_phases}: Whisper 语音识别 ──")
 
             w_device = whisper_device
             if w_device == "cuda":
@@ -278,7 +360,7 @@ class PipelineTab(QWidget):
                 self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                 def _w_progress(pct, msg, _idx=idx):
-                    overall = ((_idx - 1) + pct) / (total * 2)
+                    overall = ((_idx - 1) + pct) / (total * num_phases)
                     self._update_progress(overall, f"[Whisper {_idx}/{total}] {msg}")
 
                 try:
@@ -306,9 +388,10 @@ class PipelineTab(QWidget):
             except Exception:
                 pass
 
-            # ── 阶段 2/2: MMS_FA 强制打轴 ──
+            # ── 阶段 2: MMS_FA 强制打轴 ──
+            aligned_results: Dict[str, str] = {}
             if srt_results and not self._cancelled:
-                self._log_msg("── 阶段 2/2: MMS_FA 强制打轴 ──")
+                self._log_msg(f"── 阶段 2/{num_phases}: MMS_FA 强制打轴 ──")
 
                 a_device = align_device
                 if a_device == "cuda" and not torch.cuda.is_available():
@@ -330,7 +413,7 @@ class PipelineTab(QWidget):
                     self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                     def _a_progress(pct, msg, _idx=idx):
-                        overall = (total + (_idx - 1) + pct) / (total * 2)
+                        overall = (total + (_idx - 1) + pct) / (total * num_phases)
                         self._update_progress(overall, f"[打轴 {_idx}/{total}] {msg}")
 
                     try:
@@ -349,6 +432,7 @@ class PipelineTab(QWidget):
                         base = srt_path.rsplit('.', 1)[0]
                         output_path = f"{base}_aligned.srt"
                         write_srt(final, output_path)
+                        aligned_results[media] = output_path
 
                         if ac_threshold > 0:
                             low_align = {
@@ -383,6 +467,39 @@ class PipelineTab(QWidget):
                         torch.cuda.empty_cache()
                 except Exception:
                     pass
+
+            # ── 阶段 3: AI 翻译（可选）──
+            if translate_cfg and aligned_results and not self._cancelled:
+                self._log_msg(f"── 阶段 3/{num_phases}: AI 翻译 ──")
+                for idx, media in enumerate(media_files, 1):
+                    if self._cancelled:
+                        self._log_msg("已取消")
+                        break
+                    if media not in aligned_results:
+                        continue
+                    aligned_path = aligned_results[media]
+                    self._log_msg(f"[{idx}/{total}] 翻译 {os.path.basename(aligned_path)}")
+
+                    def _t_progress(pct, msg, _idx=idx):
+                        overall = (total * 2 + (_idx - 1) + pct) / (total * num_phases)
+                        self._update_progress(overall, f"[翻译 {_idx}/{total}] {msg}")
+
+                    try:
+                        translated_path = translate_srt(
+                            aligned_path,
+                            target_lang=translate_cfg["target_lang"],
+                            api_base=translate_cfg["api_base"],
+                            api_key=translate_cfg["api_key"],
+                            model=translate_cfg["model"],
+                            log_callback=self._log_msg,
+                            progress_callback=_t_progress,
+                        )
+                        # 合并双语字幕，输出同名 .srt
+                        bilingual_path = os.path.splitext(media)[0] + ".srt"
+                        _merge_bilingual(aligned_path, translated_path, bilingual_path)
+                        self._log_msg(f"双语字幕: {os.path.basename(bilingual_path)}")
+                    except Exception as e:
+                        self._log_msg(f"翻译出错: {e}")
 
             if not self._cancelled:
                 self._update_progress(1.0, "全部完成")

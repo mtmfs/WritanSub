@@ -104,3 +104,26 @@ def save_translate_config(values: Dict[str, Any]):
             json.dump(values, f, indent=2, ensure_ascii=False)
     except OSError:
         pass
+
+
+# ── GUI 状态持久化 ──────────────────────────────────────
+
+_GUI_STATE_PATH = os.path.join(_PROJECT_ROOT, "gui_state.json")
+
+
+def load_gui_state() -> Dict[str, Any]:
+    """加载 GUI 状态，文件不存在返回空字典"""
+    try:
+        with open(_GUI_STATE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_gui_state(state: Dict[str, Any]):
+    """保存 GUI 状态到 gui_state.json"""
+    try:
+        with open(_GUI_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass

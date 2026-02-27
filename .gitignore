@@ -10,3 +10,9 @@ build/
 
 # 配置文件含 API key，不上传
 aitrans_translate.json
+
+# GUI 状态（用户本地）
+gui_state.json
+
+# 本地工具脚本
+push.bat

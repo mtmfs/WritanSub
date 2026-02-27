@@ -12,7 +12,7 @@ from PySide6.QtCore import Signal, QObject
 
 from writansub.core.types import SRT_FILETYPES, TRANSLATE_TARGETS
 from writansub.core.translate import translate_srt
-from writansub.config import load_translate_config, save_translate_config
+from writansub.config import load_translate_config, save_translate_config, load_gui_state, save_gui_state
 from writansub.gui.widgets import LogWidget, ProgressWidget
 
 
@@ -29,6 +29,8 @@ class TranslateTab(QWidget):
         self._signals = _TranslateSignals()
         self._signals.finished.connect(self._on_finished)
         self._setup_ui()
+        self._connect_state_signals()
+        self.restore_state(load_gui_state())
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -119,6 +121,50 @@ class TranslateTab(QWidget):
         self._log = LogWidget()
         self._log.setMinimumHeight(120)
         main_layout.addWidget(self._log, 1)
+
+    def _connect_state_signals(self):
+        self._srt_edit.editingFinished.connect(self._auto_save)
+        self._out_edit.editingFinished.connect(self._auto_save)
+        self._target_combo.currentTextChanged.connect(self._auto_save)
+        self._model_edit.editingFinished.connect(self._auto_save)
+        self._base_edit.editingFinished.connect(self._auto_save)
+        self._key_edit.editingFinished.connect(self._auto_save)
+
+    def _auto_save(self):
+        state = load_gui_state()
+        state.update(self.save_state())
+        save_gui_state(state)
+
+    def save_state(self) -> dict:
+        # Also sync translate config so pipeline can read it
+        save_translate_config({
+            "target_lang": self._target_combo.currentText(),
+            "api_base": self._base_edit.text(),
+            "api_key": self._key_edit.text(),
+            "model": self._model_edit.text(),
+        })
+        return {
+            "translate.srt": self._srt_edit.text(),
+            "translate.output": self._out_edit.text(),
+            "translate.target_lang": self._target_combo.currentText(),
+            "translate.model": self._model_edit.text(),
+            "translate.api_base": self._base_edit.text(),
+            "translate.api_key": self._key_edit.text(),
+        }
+
+    def restore_state(self, state: dict):
+        if "translate.srt" in state:
+            self._srt_edit.setText(state["translate.srt"])
+        if "translate.output" in state:
+            self._out_edit.setText(state["translate.output"])
+        if "translate.target_lang" in state:
+            self._target_combo.setCurrentText(state["translate.target_lang"])
+        if "translate.model" in state:
+            self._model_edit.setText(state["translate.model"])
+        if "translate.api_base" in state:
+            self._base_edit.setText(state["translate.api_base"])
+        if "translate.api_key" in state:
+            self._key_edit.setText(state["translate.api_key"])
 
     def _browse_srt(self):
         path, _ = QFileDialog.getOpenFileName(

@@ -13,6 +13,7 @@ from PySide6.QtCore import Signal, QObject
 from writansub.core.types import AUDIO_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.srt_io import parse_srt, write_srt
 from writansub.core.alignment import load_audio, run_alignment, post_process
+from writansub.config import load_gui_state, save_gui_state
 from writansub.gui.widgets import TextRedirector, LogWidget, ProgressWidget, build_params_grid
 
 
@@ -34,6 +35,8 @@ class AlignmentTab(QWidget):
         self._signals = _AlignSignals()
         self._signals.finished.connect(self._on_finished)
         self._setup_ui()
+        self._connect_state_signals()
+        self.restore_state(load_gui_state())
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -122,6 +125,39 @@ class AlignmentTab(QWidget):
         self._log = LogWidget()
         self._log.setMinimumHeight(120)
         main_layout.addWidget(self._log, 1)
+
+    def _connect_state_signals(self):
+        self._audio_edit.editingFinished.connect(self._auto_save)
+        self._srt_edit.editingFinished.connect(self._auto_save)
+        self._out_edit.editingFinished.connect(self._auto_save)
+        self._lang_combo.currentTextChanged.connect(self._auto_save)
+        self._device_combo.currentTextChanged.connect(self._auto_save)
+
+    def _auto_save(self):
+        state = load_gui_state()
+        state.update(self.save_state())
+        save_gui_state(state)
+
+    def save_state(self) -> dict:
+        return {
+            "alignment.audio": self._audio_edit.text(),
+            "alignment.srt": self._srt_edit.text(),
+            "alignment.output": self._out_edit.text(),
+            "alignment.lang": self._lang_combo.currentText(),
+            "alignment.device": self._device_combo.currentText(),
+        }
+
+    def restore_state(self, state: dict):
+        if "alignment.audio" in state:
+            self._audio_edit.setText(state["alignment.audio"])
+        if "alignment.srt" in state:
+            self._srt_edit.setText(state["alignment.srt"])
+        if "alignment.output" in state:
+            self._out_edit.setText(state["alignment.output"])
+        if "alignment.lang" in state:
+            self._lang_combo.setCurrentText(state["alignment.lang"])
+        if "alignment.device" in state:
+            self._device_combo.setCurrentText(state["alignment.device"])
 
     def _browse_audio(self):
         filter_str = "音频文件 (*.wav *.mp3 *.flac *.ogg *.aac *.m4a);;所有文件 (*.*)"

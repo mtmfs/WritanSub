@@ -12,7 +12,7 @@ from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.core.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.whisper import transcribe_to_srt
-from writansub.config import PP_DEFAULTS, PARAM_DEFS, load_pp_config, save_pp_config
+from writansub.config import PP_DEFAULTS, PARAM_DEFS, load_pp_config, save_pp_config, load_gui_state, save_gui_state
 from writansub.gui.widgets import LogWidget, ProgressWidget
 
 
@@ -29,6 +29,8 @@ class WhisperTab(QWidget):
         self._signals = _WhisperSignals()
         self._signals.finished.connect(self._on_finished)
         self._setup_ui()
+        self._connect_state_signals()
+        self.restore_state(load_gui_state())
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -130,6 +132,39 @@ class WhisperTab(QWidget):
         self._log = LogWidget()
         self._log.setMinimumHeight(120)
         main_layout.addWidget(self._log, 1)
+
+    def _connect_state_signals(self):
+        self._media_edit.editingFinished.connect(self._auto_save)
+        self._output_edit.editingFinished.connect(self._auto_save)
+        self._lang_combo.currentTextChanged.connect(self._auto_save)
+        self._device_combo.currentTextChanged.connect(self._auto_save)
+        self._chk_cond_prev.stateChanged.connect(self._auto_save)
+
+    def _auto_save(self):
+        state = load_gui_state()
+        state.update(self.save_state())
+        save_gui_state(state)
+
+    def save_state(self) -> dict:
+        return {
+            "whisper.media": self._media_edit.text(),
+            "whisper.output": self._output_edit.text(),
+            "whisper.lang": self._lang_combo.currentText(),
+            "whisper.device": self._device_combo.currentText(),
+            "whisper.cond_prev": self._chk_cond_prev.isChecked(),
+        }
+
+    def restore_state(self, state: dict):
+        if "whisper.media" in state:
+            self._media_edit.setText(state["whisper.media"])
+        if "whisper.output" in state:
+            self._output_edit.setText(state["whisper.output"])
+        if "whisper.lang" in state:
+            self._lang_combo.setCurrentText(state["whisper.lang"])
+        if "whisper.device" in state:
+            self._device_combo.setCurrentText(state["whisper.device"])
+        if "whisper.cond_prev" in state:
+            self._chk_cond_prev.setChecked(state["whisper.cond_prev"])
 
     def _browse_media(self):
         filter_str = "媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a);;所有文件 (*.*)"

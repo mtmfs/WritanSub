@@ -76,12 +76,13 @@ def mark_low_align_in_review(base: str, low_indices: set):
                 if line.startswith("Dialogue:"):
                     dialogue_idx += 1
                     if dialogue_idx in low_indices:
-                        parts = line.split(",,", 1)
-                        if len(parts) == 2:
-                            text = parts[1].rstrip("\n")
+                        pos = line.rfind(",,")
+                        if pos >= 0:
+                            prefix = line[:pos + 2]
+                            text = line[pos + 2:].rstrip("\n")
                             if not text.startswith("【"):
                                 text = f"【{text}】"
-                            line = f"{parts[0]},,{text}\n"
+                            line = f"{prefix}{text}\n"
                 new_lines.append(line)
             with open(review_ass, "w", encoding="utf-8-sig") as f:
                 f.writelines(new_lines)

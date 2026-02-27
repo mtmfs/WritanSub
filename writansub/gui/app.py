@@ -6,6 +6,8 @@ import sys
 from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 from PySide6.QtCore import Qt
 
+from writansub.config import load_gui_state, save_gui_state
+
 from writansub.gui.pipeline_tab import PipelineTab
 from writansub.gui.whisper_tab import WhisperTab
 from writansub.gui.alignment_tab import AlignmentTab
@@ -38,6 +40,16 @@ class MainWindow(QMainWindow):
 
         if initial_media:
             self.pipeline_tab.set_media_path(initial_media)
+
+    def closeEvent(self, event):
+        """关闭时收集所有 tab 状态并保存（兜底）"""
+        state = load_gui_state()
+        state.update(self.pipeline_tab.save_state())
+        state.update(self.whisper_tab.save_state())
+        state.update(self.alignment_tab.save_state())
+        state.update(self.translate_tab.save_state())
+        save_gui_state(state)
+        super().closeEvent(event)
 
 
 def main():
