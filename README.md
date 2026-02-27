@@ -15,8 +15,6 @@ AI 字幕处理流水线：语音识别 → 强制打轴 → AI 翻译
 - Python 3.12+
 - NVIDIA 显卡 + 驱动 ≥570（CPU 模式可用但很慢）
   - 默认 CUDA 12.8，30/40 系如驱动低于 570 需升级驱动，或将 `pyproject.toml` 中 `cu128` 全部改为 `cu124`
-- [ffmpeg](https://ffmpeg.org/download.html)（需要在 PATH 中）
-
 ## 安装
 
 ### 方法一：使用 uv（推荐，速度更快）
@@ -29,14 +27,13 @@ pip install uv
 git clone https://github.com/mtmfs/WritanSub.git
 cd WritanSub
 
-# 创建虚拟环境并安装依赖
-uv venv
-uv pip install -e .
+# 一键创建虚拟环境并安装所有依赖
+uv sync
 ```
 
 ### 方法二：使用普通 pip
 
-如果不使用 uv，**必须**通过 `requirements.txt` 安装以确保下载正确的 CUDA 版本 PyTorch（直接 `pip install .` 可能会下载错误的 CPU 版本）：
+**必须**通过 `requirements.txt` 安装以确保下载正确的 CUDA 版本 PyTorch（直接 `pip install .` 可能会下载 CPU 版本）：
 
 ```bash
 # 克隆项目
@@ -50,6 +47,7 @@ python -m venv .venv
 
 # 安装依赖
 pip install -r requirements.txt
+pip install -e .
 ```
 
 ## 使用
@@ -80,7 +78,7 @@ WritanSub/
 │   │   ├── whisper.py     # 语音识别
 │   │   ├── alignment.py   # 强制对齐 + 后处理
 │   │   └── translate.py   # AI 翻译
-│   ├── gui/               # Tkinter 界面
+│   ├── gui/               # PySide6 界面
 │   │   ├── widgets.py     # 通用控件
 │   │   ├── pipeline_tab.py
 │   │   ├── whisper_tab.py
