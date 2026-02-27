@@ -16,3 +16,8 @@ gui_state.json
 
 # 本地工具脚本
 push.bat
+
+# 敏感文件 & 个人笔记
+API key*.txt
+改进方向*.txt
+开发者文件/
