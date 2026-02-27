@@ -19,6 +19,8 @@ AI 字幕处理流水线：语音识别 → 强制打轴 → AI 翻译
 
 ## 安装
 
+### 方法一：使用 uv（推荐，速度更快）
+
 ```bash
 # 安装 uv（如果没有）
 pip install uv
@@ -32,6 +34,24 @@ uv venv
 uv pip install -e .
 ```
 
+### 方法二：使用普通 pip
+
+如果不使用 uv，**必须**通过 `requirements.txt` 安装以确保下载正确的 CUDA 版本 PyTorch（直接 `pip install .` 可能会下载错误的 CPU 版本）：
+
+```bash
+# 克隆项目
+git clone https://github.com/mtmfs/WritanSub.git
+cd WritanSub
+
+# 创建虚拟环境（可选但推荐）
+python -m venv .venv
+# Windows 激活: .venv\Scripts\activate
+# Linux/macOS 激活: source .venv/bin/activate
+
+# 安装依赖
+pip install -r requirements.txt
+```
+
 ## 使用
 
 双击 `WritanSub.bat` 启动 GUI，或：
@@ -42,12 +62,12 @@ python -m writansub
 
 GUI 提供四个页面：
 
-| 页面 | 功能 |
-|------|------|
+| 页面       | 功能                              |
+| ---------- | --------------------------------- |
 | 一键流水线 | 批量 Whisper + 打轴，支持文件列表 |
-| 语音识别 | 单文件 Whisper 转录 |
-| 强制打轴 | 单文件 MMS_FA 对齐 |
-| AI 翻译 | 单文件字幕翻译 |
+| 语音识别   | 单文件 Whisper 转录               |
+| 强制打轴   | 单文件 MMS_FA 对齐                |
+| AI 翻译    | 单文件字幕翻译                    |
 
 ## 项目结构
 
