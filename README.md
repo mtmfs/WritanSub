@@ -67,6 +67,57 @@ GUI 提供四个页面：
 | 强制打轴   | 单文件 MMS_FA 对齐                |
 | AI 翻译    | 单文件字幕翻译                    |
 
+## 输出文件
+
+所有输出文件生成在**输入文件所在目录**，以输入文件名为前缀：
+
+以 `video.mp4` 为例：
+
+| 文件 | 说明 | 生成条件 |
+| --- | --- | --- |
+| `video.srt` | Whisper 识别的原始字幕 | 勾选"保留 Whisper 原始 SRT"时保留，否则打轴后自动清理 |
+| `video_aligned.srt` | 经 MMS_FA 强制打轴后的字幕（**最终结果**） | 始终生成 |
+| `video_review.srt` | 校对标记版字幕（低置信词用`【?…】`包裹，低置信句用`【】`包裹） | 存在低置信内容时生成 |
+| `video_review.ass` | 校对标记版 ASS 字幕（低置信词红色高亮，可直接拖入播放器预览） | 同上 |
+| `video_translated.srt` | AI 翻译后的字幕 | 使用 AI 翻译功能时生成 |
+
+## 模型下载
+
+首次运行需要下载以下模型（合计约 3 GB），下载后缓存到本地，后续不再重复下载：
+
+| 模型 | 用途 | 大小 |
+| --- | --- | --- |
+| Systran/faster-whisper-large-v3 | 语音识别 | ~1.5 GB |
+| MMS_FA (torchaudio 内置) | 强制打轴 | ~1.2 GB |
+
+提供三种下载方式：
+
+### 方式一：自动下载（推荐）
+
+直接启动程序即可，首次运行时会自动从 Hugging Face 下载模型：
+
+```bash
+python -m writansub
+```
+
+### 方式二：手动下载（原版地址）
+
+如果自动下载失败，可从 Hugging Face 手动下载：
+
+- Whisper: [huggingface.co/Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) — 下载全部文件放入 `~/.cache/huggingface/hub/models--Systran--faster-whisper-large-v3/`
+- MMS_FA: 由 torchaudio 管理，缓存在 `~/.cache/torch/hub/`，参考 [PyTorch 文档](https://pytorch.org/audio/stable/pipelines.html#torchaudio.pipelines.MMS_FA)
+
+### 方式三：国内镜像下载
+
+设置 Hugging Face 镜像环境变量后启动程序，模型会从国内镜像自动下载：
+
+```bash
+set HF_ENDPOINT=https://hf-mirror.com
+python -m writansub
+```
+
+也可以直接从镜像站手动下载 Whisper 模型：[hf-mirror.com/Systran/faster-whisper-large-v3](https://hf-mirror.com/Systran/faster-whisper-large-v3)
+
 ## 项目结构
 
 ```
