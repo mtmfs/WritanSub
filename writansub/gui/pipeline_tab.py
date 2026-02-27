@@ -1,11 +1,17 @@
 """一键流水线页：批量处理，两阶段模型管理"""
 
+import gc
 import os
 import sys
 import threading
-import tkinter as tk
-from tkinter import filedialog, ttk
 from typing import Dict, List, Optional
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
+    QListWidget, QPushButton, QLabel, QComboBox, QCheckBox,
+    QFileDialog, QFrame, QAbstractItemView,
+)
+from PySide6.QtCore import Signal, QObject
 
 from writansub.core.types import MEDIA_FILETYPES, LANGUAGES
 from writansub.core.srt_io import parse_srt, write_srt, mark_low_align_in_review
@@ -13,14 +19,17 @@ from writansub.core.whisper import transcribe_to_srt, _keep_alive
 from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
 from writansub.pipeline import PipelineOrchestrator
 from writansub.gui.widgets import (
-    TextRedirector, ScrollableFrame, ToolTip,
-    make_log_area, make_progress_area,
-    update_progress, reset_progress,
-    gui_log, clear_log, build_params_grid,
+    TextRedirector, ScrollableFrame, LogWidget, ProgressWidget, build_params_grid,
 )
 
 
-class PipelineTab:
+class _PipelineSignals(QObject):
+    """线程安全的信号"""
+    finished = Signal()
+    enable_start = Signal(bool)
+
+
+class PipelineTab(QWidget):
     """Tab 1: 一键流水线 (Whisper → ForceAlign)"""
 
     _PP_KEYS = [
@@ -29,169 +38,187 @@ class PipelineTab:
         "min_duration",
     ]
 
-    def __init__(self, parent: ttk.Frame):
-        self.parent = parent
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._orchestrator: Optional[PipelineOrchestrator] = None
         self._running = False
         self._cancelled = False
         self._media_files: List[str] = []
+        self._signals = _PipelineSignals()
+        self._signals.finished.connect(self._on_finished)
+        self._signals.enable_start.connect(self._set_buttons_state)
 
-        container = ttk.Frame(parent)
-        container.pack(fill="both", expand=True)
+        self._setup_ui()
 
-        scrollable = ScrollableFrame(container)
-        scrollable.pack(fill="both", expand=True)
+    def _setup_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        inner = ttk.Frame(scrollable.inner, padding=12)
-        inner.pack(fill="x")
+        # 可滚动区域
+        scrollable = ScrollableFrame()
+        main_layout.addWidget(scrollable, 1)
 
-        card_file = ttk.LabelFrame(inner, text="输入文件", padding=8)
-        card_file.pack(fill="x", pady=(0, 8))
+        inner_layout = QVBoxLayout(scrollable.inner)
+        inner_layout.setContentsMargins(12, 12, 12, 12)
 
-        file_body = ttk.Frame(card_file)
-        file_body.pack(fill="x")
-        self.file_listbox = tk.Listbox(file_body, height=4, selectmode="extended")
-        self.file_listbox.pack(side="left", fill="both", expand=True)
-        list_scroll = ttk.Scrollbar(
-            file_body, orient="vertical", command=self.file_listbox.yview,
+        # 输入文件
+        card_file = QGroupBox("输入文件")
+        inner_layout.addWidget(card_file)
+        file_layout = QHBoxLayout(card_file)
+
+        self._file_list = QListWidget()
+        self._file_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._file_list.setMaximumHeight(100)
+        file_layout.addWidget(self._file_list, 1)
+
+        btn_col = QVBoxLayout()
+        file_layout.addLayout(btn_col)
+        btn_add = QPushButton("添加")
+        btn_add.clicked.connect(self._add_files)
+        btn_col.addWidget(btn_add)
+        btn_remove = QPushButton("移除")
+        btn_remove.clicked.connect(self._remove_files)
+        btn_col.addWidget(btn_remove)
+        btn_clear = QPushButton("清空")
+        btn_clear.clicked.connect(self._clear_files)
+        btn_col.addWidget(btn_clear)
+        btn_col.addStretch()
+
+        # 输出中间文件
+        card_retention = QGroupBox("输出中间文件")
+        inner_layout.addWidget(card_retention)
+        ret_layout = QHBoxLayout(card_retention)
+        self._chk_whisper = QCheckBox("Whisper 原始 SRT")
+        ret_layout.addWidget(self._chk_whisper)
+        self._chk_force_align = QCheckBox("打轴 SRT")
+        ret_layout.addWidget(self._chk_force_align)
+        ret_layout.addStretch()
+
+        # 基本设置
+        card_basic = QGroupBox("基本设置")
+        inner_layout.addWidget(card_basic)
+        basic_layout = QHBoxLayout(card_basic)
+
+        basic_layout.addWidget(QLabel("语言"))
+        self._lang_combo = QComboBox()
+        self._lang_combo.addItems(LANGUAGES)
+        self._lang_combo.setCurrentText("ja")
+        basic_layout.addWidget(self._lang_combo)
+
+        basic_layout.addWidget(QLabel("Whisper 设备"))
+        self._whisper_device_combo = QComboBox()
+        self._whisper_device_combo.addItems(["cuda", "cpu"])
+        basic_layout.addWidget(self._whisper_device_combo)
+
+        basic_layout.addWidget(QLabel("打轴设备"))
+        self._align_device_combo = QComboBox()
+        self._align_device_combo.addItems(["cuda", "cpu"])
+        basic_layout.addWidget(self._align_device_combo)
+
+        self._chk_cond_prev = QCheckBox("上文关联")
+        self._chk_cond_prev.setChecked(True)
+        self._chk_cond_prev.setToolTip(
+            "开启时，前一句识别结果作为下一句的上下文，\n"
+            "提高连贯性但可能传播错误。\n"
+            "关闭可防止幻觉扩散。"
         )
-        list_scroll.pack(side="left", fill="y")
-        self.file_listbox.configure(yscrollcommand=list_scroll.set)
+        basic_layout.addWidget(self._chk_cond_prev)
+        basic_layout.addStretch()
 
-        btn_col = ttk.Frame(file_body)
-        btn_col.pack(side="left", padx=(6, 0))
-        ttk.Button(btn_col, text="添加", width=6, command=self._add_files).pack(pady=1)
-        ttk.Button(btn_col, text="移除", width=6, command=self._remove_files).pack(pady=1)
-        ttk.Button(btn_col, text="清空", width=6, command=self._clear_files).pack(pady=1)
-
-        card_retention = ttk.LabelFrame(inner, text="输出中间文件", padding=8)
-        card_retention.pack(fill="x", pady=(0, 8))
-
-        ret_row = ttk.Frame(card_retention)
-        ret_row.pack(anchor="w")
-        self._retention_vars: Dict[str, tk.BooleanVar] = {}
-        v1 = tk.BooleanVar(value=False)
-        self._retention_vars["whisper"] = v1
-        ttk.Checkbutton(ret_row, text="Whisper 原始 SRT", variable=v1).pack(
-            side="left", padx=(0, 16))
-        v2 = tk.BooleanVar(value=False)
-        self._retention_vars["force_align"] = v2
-        ttk.Checkbutton(ret_row, text="打轴 SRT", variable=v2).pack(side="left")
-
-        card_basic = ttk.LabelFrame(inner, text="基本设置", padding=8)
-        card_basic.pack(fill="x", pady=(0, 8))
-
-        basic_row = ttk.Frame(card_basic)
-        basic_row.pack(anchor="w")
-        ttk.Label(basic_row, text="语言").pack(side="left")
-        self.lang_var = tk.StringVar(value="ja")
-        ttk.Combobox(
-            basic_row, textvariable=self.lang_var, values=LANGUAGES,
-            state="readonly", width=6,
-        ).pack(side="left", padx=(4, 16))
-        ttk.Label(basic_row, text="Whisper 设备").pack(side="left")
-        self.whisper_device_var = tk.StringVar(value="cuda")
-        ttk.Combobox(
-            basic_row, textvariable=self.whisper_device_var,
-            values=["cuda", "cpu"], state="readonly", width=6,
-        ).pack(side="left", padx=(4, 16))
-        ttk.Label(basic_row, text="打轴设备").pack(side="left")
-        self.align_device_var = tk.StringVar(value="cuda")
-        ttk.Combobox(
-            basic_row, textvariable=self.align_device_var,
-            values=["cuda", "cpu"], state="readonly", width=6,
-        ).pack(side="left", padx=(4, 16))
-
-        self._cond_prev_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            basic_row, text="上文关联",
-            variable=self._cond_prev_var,
-        ).pack(side="left")
-        cond_tip = tk.Label(
-            basic_row, text="?", fg="#4a86c8", cursor="question_arrow",
-            font=("TkDefaultFont", 9, "bold"),
-        )
-        cond_tip.pack(side="left", padx=(2, 0))
-        ToolTip(cond_tip, "开启时，前一句识别结果作为下一句的上下文，\n"
-                          "提高连贯性但可能传播错误。\n"
-                          "关闭可防止幻觉扩散。")
-
-        card_pp = ttk.LabelFrame(inner, text="后处理参数", padding=8)
-        card_pp.pack(fill="x", pady=(0, 8))
+        # 后处理参数
+        card_pp = QGroupBox("后处理参数")
+        inner_layout.addWidget(card_pp)
         self._pp_vars = build_params_grid(card_pp, self._PP_KEYS)
 
-        action_bar = ttk.Frame(container, padding=(12, 6))
-        action_bar.pack(fill="x")
+        inner_layout.addStretch()
 
-        btn_row = ttk.Frame(action_bar)
-        btn_row.pack(fill="x")
-        self.start_btn = ttk.Button(
-            btn_row, text="开始处理", command=self._start,
-        )
-        self.start_btn.pack(side="right", padx=(4, 0))
-        self.cancel_btn = ttk.Button(
-            btn_row, text="取消", command=self._cancel, state="disabled",
-        )
-        self.cancel_btn.pack(side="right")
+        # 操作按钮
+        action_bar = QWidget()
+        main_layout.addWidget(action_bar)
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(12, 6, 12, 6)
+        action_layout.addStretch()
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.clicked.connect(self._cancel)
+        self._cancel_btn.setEnabled(False)
+        action_layout.addWidget(self._cancel_btn)
+        self._start_btn = QPushButton("开始处理")
+        self._start_btn.clicked.connect(self._start)
+        action_layout.addWidget(self._start_btn)
 
-        self._progress_bar, self._status_label = make_progress_area(container)
-        ttk.Separator(container, orient="horizontal").pack(fill="x")
+        # 进度条
+        self._progress = ProgressWidget()
+        main_layout.addWidget(self._progress)
 
-        log_frame = ttk.Frame(container, padding=(12, 4, 12, 12))
-        log_frame.pack(fill="both", expand=True)
-        log_container = ttk.Frame(log_frame)
-        log_container.pack(fill="both", expand=True)
-        self.log_text, scrollbar = make_log_area(log_container)
-        self.log_text.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(sep)
+
+        # 日志区
+        self._log = LogWidget()
+        self._log.setMinimumHeight(120)
+        main_layout.addWidget(self._log, 1)
 
     def set_media_path(self, path: str):
         """供外部（如 sys.argv）设置媒体路径"""
         if path and path not in self._media_files:
             self._media_files.append(path)
-            self.file_listbox.insert(tk.END, os.path.basename(path))
+            self._file_list.addItem(os.path.basename(path))
 
     def _add_files(self):
-        paths = filedialog.askopenfilenames(filetypes=MEDIA_FILETYPES)
+        filter_str = "媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a);;所有文件 (*.*)"
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择媒体文件", "", filter_str)
         for p in paths:
             if p not in self._media_files:
                 self._media_files.append(p)
-                self.file_listbox.insert(tk.END, os.path.basename(p))
+                self._file_list.addItem(os.path.basename(p))
 
     def _remove_files(self):
-        for i in reversed(self.file_listbox.curselection()):
-            self.file_listbox.delete(i)
-            del self._media_files[i]
+        for item in reversed(self._file_list.selectedItems()):
+            row = self._file_list.row(item)
+            self._file_list.takeItem(row)
+            del self._media_files[row]
 
     def _clear_files(self):
-        self.file_listbox.delete(0, tk.END)
+        self._file_list.clear()
         self._media_files.clear()
 
-    def _log(self, msg: str):
-        gui_log(self.log_text, msg)
+    def _log_msg(self, msg: str):
+        self._log.log(msg)
 
-    def _progress(self, pct: float, msg: str):
-        update_progress(self.parent, self._progress_bar,
-                        self._status_label, pct, msg)
+    def _update_progress(self, pct: float, msg: str):
+        self._progress.update_progress(pct, msg)
+
+    def _set_buttons_state(self, running: bool):
+        self._start_btn.setEnabled(not running)
+        self._cancel_btn.setEnabled(running)
+
+    def _on_finished(self):
+        self._running = False
+        self._set_buttons_state(False)
 
     def _start(self):
         if not self._media_files:
-            self._log("请先添加媒体文件")
+            self._log_msg("请先添加媒体文件")
             return
 
         self._running = True
         self._cancelled = False
-        self.start_btn.configure(state="disabled")
-        self.cancel_btn.configure(state="normal")
-        clear_log(self.log_text)
-        reset_progress(self.parent, self._progress_bar, self._status_label)
+        self._set_buttons_state(True)
+        self._log.clear_log()
+        self._progress.reset()
 
-        lang = self.lang_var.get()
-        whisper_device = self.whisper_device_var.get()
-        align_device = self.align_device_var.get()
-        retention = {k: v.get() for k, v in self._retention_vars.items()}
-        pp = {k: v.get() for k, v in self._pp_vars.items()}
-        cond_prev = self._cond_prev_var.get()
+        lang = self._lang_combo.currentText()
+        whisper_device = self._whisper_device_combo.currentText()
+        align_device = self._align_device_combo.currentText()
+        retention = {
+            "whisper": self._chk_whisper.isChecked(),
+            "force_align": self._chk_force_align.isChecked(),
+        }
+        pp = {k: v.value() for k, v in self._pp_vars.items()}
+        cond_prev = self._chk_cond_prev.isChecked()
 
         thread = threading.Thread(
             target=self._run_pipeline,
@@ -205,7 +232,7 @@ class PipelineTab:
         self._cancelled = True
         if self._orchestrator:
             self._orchestrator.cancel()
-        self._log("正在取消...")
+        self._log_msg("正在取消...")
 
     def _run_pipeline(
         self, media_files: List[str], lang: str,
@@ -213,22 +240,21 @@ class PipelineTab:
         retention: Dict[str, bool], pp: Dict[str, float],
         cond_prev: bool = True,
     ):
-        redirector = TextRedirector(self.log_text)
+        import torch
+
+        redirector = TextRedirector(self._log)
         old_stdout = sys.stdout
         sys.stdout = redirector
-
-        import gc
-        import torch
 
         wc_threshold = pp.pop("word_conf_threshold", 0.50)
         ac_threshold = pp.pop("align_conf_threshold", 0.50)
 
         try:
             total = len(media_files)
-            srt_results: Dict[str, str] = {}  # media_path -> srt_path
+            srt_results: Dict[str, str] = {}
 
-            # ── 阶段 1/2: Whisper 语音识别 ──────────────────
-            self._log("── 阶段 1/2: Whisper 语音识别 ──")
+            # ── 阶段 1/2: Whisper 语音识别 ──
+            self._log_msg("── 阶段 1/2: Whisper 语音识别 ──")
 
             w_device = whisper_device
             if w_device == "cuda":
@@ -236,31 +262,31 @@ class PipelineTab:
                     import ctranslate2
                     ctranslate2.get_supported_compute_types("cuda")
                 except Exception:
-                    self._log("CUDA 不可用，Whisper 回退到 CPU")
+                    self._log_msg("CUDA 不可用，Whisper 回退到 CPU")
                     w_device = "cpu"
 
             from faster_whisper import WhisperModel
-            self._log("加载 Whisper 模型...")
+            self._log_msg("加载 Whisper 模型...")
             whisper_model = WhisperModel("large-v3", device=w_device,
                                          compute_type="int8")
 
             for idx, media in enumerate(media_files, 1):
                 if self._cancelled:
-                    self._log("已取消")
+                    self._log_msg("已取消")
                     break
 
-                self._log(f"[{idx}/{total}] {os.path.basename(media)}")
+                self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                 def _w_progress(pct, msg, _idx=idx):
                     overall = ((_idx - 1) + pct) / (total * 2)
-                    self._progress(overall, f"[Whisper {_idx}/{total}] {msg}")
+                    self._update_progress(overall, f"[Whisper {_idx}/{total}] {msg}")
 
                 try:
                     srt_path = transcribe_to_srt(
                         media,
                         lang=lang,
                         device=w_device,
-                        log_callback=self._log,
+                        log_callback=self._log_msg,
                         progress_callback=_w_progress,
                         word_conf_threshold=wc_threshold,
                         condition_on_previous_text=cond_prev,
@@ -268,9 +294,9 @@ class PipelineTab:
                     )
                     srt_results[media] = srt_path
                 except Exception as e:
-                    self._log(f"文件处理出错: {e}")
+                    self._log_msg(f"文件处理出错: {e}")
 
-            # 释放 Whisper 模型 — 保留引用以规避 CTranslate2 析构崩溃
+            # 释放 Whisper 模型
             _keep_alive.append(whisper_model)
             del whisper_model
             gc.collect()
@@ -280,37 +306,37 @@ class PipelineTab:
             except Exception:
                 pass
 
-            # ── 阶段 2/2: MMS_FA 强制打轴 ──────────────────
+            # ── 阶段 2/2: MMS_FA 强制打轴 ──
             if srt_results and not self._cancelled:
-                self._log("── 阶段 2/2: MMS_FA 强制打轴 ──")
+                self._log_msg("── 阶段 2/2: MMS_FA 强制打轴 ──")
 
                 a_device = align_device
                 if a_device == "cuda" and not torch.cuda.is_available():
-                    self._log("CUDA 不可用，回退到 CPU")
+                    self._log_msg("CUDA 不可用，回退到 CPU")
                     a_device = "cpu"
 
-                self._log("加载 MMS_FA 模型...")
+                self._log_msg("加载 MMS_FA 模型...")
                 mms_bundle = init_model(a_device)
 
                 for idx, media in enumerate(media_files, 1):
                     if self._cancelled:
-                        self._log("已取消")
+                        self._log_msg("已取消")
                         break
 
                     if media not in srt_results:
                         continue
 
                     srt_path = srt_results[media]
-                    self._log(f"[{idx}/{total}] {os.path.basename(media)}")
+                    self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                     def _a_progress(pct, msg, _idx=idx):
                         overall = (total + (_idx - 1) + pct) / (total * 2)
-                        self._progress(overall, f"[打轴 {_idx}/{total}] {msg}")
+                        self._update_progress(overall, f"[打轴 {_idx}/{total}] {msg}")
 
                     try:
                         waveform = load_audio(media)
                         subs = parse_srt(srt_path, lang=lang)
-                        self._log(f"字幕 {len(subs)} 条，设备: {a_device}")
+                        self._log_msg(f"字幕 {len(subs)} 条，设备: {a_device}")
 
                         aligned = run_alignment(
                             waveform, subs, device=a_device,
@@ -331,7 +357,7 @@ class PipelineTab:
                             }
                             if low_align:
                                 mark_low_align_in_review(base, low_align)
-                                self._log(
+                                self._log_msg(
                                     f"低置信对齐 {len(low_align)} 句，已标记"
                                 )
 
@@ -340,14 +366,14 @@ class PipelineTab:
                             if srt_path and os.path.isfile(srt_path):
                                 try:
                                     os.remove(srt_path)
-                                    self._log(
+                                    self._log_msg(
                                         f"已清理: {os.path.basename(srt_path)}"
                                     )
                                 except OSError:
                                     pass
 
                     except Exception as e:
-                        self._log(f"文件处理出错: {e}")
+                        self._log_msg(f"文件处理出错: {e}")
 
                 # 释放 MMS_FA 模型
                 del mms_bundle
@@ -359,13 +385,11 @@ class PipelineTab:
                     pass
 
             if not self._cancelled:
-                self._progress(1.0, "全部完成")
-                self._log(f"全部完成! 共处理 {total} 个文件")
+                self._update_progress(1.0, "全部完成")
+                self._log_msg(f"全部完成! 共处理 {total} 个文件")
         except Exception as e:
-            self._log(f"出错: {e}")
+            self._log_msg(f"出错: {e}")
         finally:
             sys.stdout = old_stdout
-            self._running = False
             self._orchestrator = None
-            self.parent.after(0, lambda: self.start_btn.configure(state="normal"))
-            self.parent.after(0, lambda: self.cancel_btn.configure(state="disabled"))
+            self._signals.finished.emit()

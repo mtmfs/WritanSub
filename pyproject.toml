@@ -14,6 +14,7 @@ dependencies = [
     "pypinyin",
     "unidecode",
     "korean-romanizer",
+    "PySide6>=6.5.0",
 ]
 
 [project.scripts]

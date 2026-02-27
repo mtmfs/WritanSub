@@ -2,8 +2,9 @@
 
 import os
 import sys
-import tkinter as tk
-from tkinter import ttk
+
+from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PySide6.QtCore import Qt
 
 from writansub.gui.pipeline_tab import PipelineTab
 from writansub.gui.whisper_tab import WhisperTab
@@ -11,34 +12,29 @@ from writansub.gui.alignment_tab import AlignmentTab
 from writansub.gui.translate_tab import TranslateTab
 
 
-class AItransApp:
+class MainWindow(QMainWindow):
     """主窗口：四个选项卡"""
 
-    def __init__(self, root: tk.Tk, initial_media: str = ""):
-        self.root = root
-        root.title("AItrans - 字幕处理流水线")
-        root.unbind_class("TSpinbox", "<MouseWheel>")
-        root.geometry("720x700")
-        root.minsize(640, 520)
+    def __init__(self, initial_media: str = ""):
+        super().__init__()
+        self.setWindowTitle("WritanSub - AI 字幕处理流水线")
+        self.setMinimumSize(640, 520)
+        self.resize(720, 700)
 
-        notebook = ttk.Notebook(root)
-        notebook.pack(fill="both", expand=True, padx=6, pady=6)
+        tabs = QTabWidget()
+        self.setCentralWidget(tabs)
 
-        pipeline_frame = ttk.Frame(notebook)
-        notebook.add(pipeline_frame, text="一键流水线")
-        self.pipeline_tab = PipelineTab(pipeline_frame)
+        self.pipeline_tab = PipelineTab()
+        tabs.addTab(self.pipeline_tab, "一键流水线")
 
-        whisper_frame = ttk.Frame(notebook)
-        notebook.add(whisper_frame, text="语音识别")
-        self.whisper_tab = WhisperTab(whisper_frame)
+        self.whisper_tab = WhisperTab()
+        tabs.addTab(self.whisper_tab, "语音识别")
 
-        align_frame = ttk.Frame(notebook)
-        notebook.add(align_frame, text="强制打轴")
-        self.align_tab = AlignmentTab(align_frame)
+        self.alignment_tab = AlignmentTab()
+        tabs.addTab(self.alignment_tab, "强制打轴")
 
-        translate_frame = ttk.Frame(notebook)
-        notebook.add(translate_frame, text="AI 翻译")
-        self.translate_tab = TranslateTab(translate_frame)
+        self.translate_tab = TranslateTab()
+        tabs.addTab(self.translate_tab, "AI 翻译")
 
         if initial_media:
             self.pipeline_tab.set_media_path(initial_media)
@@ -52,13 +48,19 @@ def main():
     except Exception:
         pass
 
+    # Qt 高 DPI 支持
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
     initial_media = ""
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         initial_media = sys.argv[1]
 
-    root = tk.Tk()
-    AItransApp(root, initial_media=initial_media)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    window = MainWindow(initial_media=initial_media)
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

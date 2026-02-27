@@ -2,22 +2,26 @@
 
 import sys
 import threading
-import tkinter as tk
-from tkinter import filedialog, ttk
 from typing import Dict
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
+    QLineEdit, QPushButton, QLabel, QComboBox, QFileDialog, QFrame,
+)
+from PySide6.QtCore import Signal, QObject
 
 from writansub.core.types import AUDIO_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.srt_io import parse_srt, write_srt
 from writansub.core.alignment import load_audio, run_alignment, post_process
-from writansub.gui.widgets import (
-    TextRedirector,
-    make_log_area, make_progress_area,
-    update_progress, reset_progress,
-    gui_log, clear_log, build_params_grid,
-)
+from writansub.gui.widgets import TextRedirector, LogWidget, ProgressWidget, build_params_grid
 
 
-class AlignmentTab:
+class _AlignSignals(QObject):
+    """线程安全的信号"""
+    finished = Signal()
+
+
+class AlignmentTab(QWidget):
     """Tab 3: 独立 MMS_FA 强制打轴"""
 
     _PP_KEYS = [
@@ -25,147 +29,162 @@ class AlignmentTab:
         "min_gap", "min_duration",
     ]
 
-    def __init__(self, parent: ttk.Frame):
-        self.parent = parent
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._signals = _AlignSignals()
+        self._signals.finished.connect(self._on_finished)
+        self._setup_ui()
 
-        container = ttk.Frame(parent)
-        container.pack(fill="both", expand=True)
+    def _setup_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        settings = ttk.Frame(container, padding=12)
-        settings.pack(fill="x")
+        settings = QWidget()
+        main_layout.addWidget(settings)
+        settings_layout = QVBoxLayout(settings)
+        settings_layout.setContentsMargins(12, 12, 12, 12)
 
-        card_file = ttk.LabelFrame(settings, text="文件", padding=8)
-        card_file.pack(fill="x", pady=(0, 8))
+        # 文件
+        card_file = QGroupBox("文件")
+        settings_layout.addWidget(card_file)
+        file_layout = QGridLayout(card_file)
 
-        r = 0
-        ttk.Label(card_file, text="音频文件").grid(row=r, column=0, sticky="w", pady=3)
-        self.audio_var = tk.StringVar()
-        ttk.Entry(card_file, textvariable=self.audio_var).grid(
-            row=r, column=1, sticky="ew", padx=4, pady=3)
-        ttk.Button(card_file, text="浏览", width=6, command=self._browse_audio).grid(
-            row=r, column=2, pady=3)
-        r += 1
+        file_layout.addWidget(QLabel("音频文件"), 0, 0)
+        self._audio_edit = QLineEdit()
+        file_layout.addWidget(self._audio_edit, 0, 1)
+        btn_audio = QPushButton("浏览")
+        btn_audio.clicked.connect(self._browse_audio)
+        file_layout.addWidget(btn_audio, 0, 2)
 
-        ttk.Label(card_file, text="字幕文件").grid(row=r, column=0, sticky="w", pady=3)
-        self.srt_var = tk.StringVar()
-        self.srt_var.trace_add("write", self._on_srt_changed)
-        ttk.Entry(card_file, textvariable=self.srt_var).grid(
-            row=r, column=1, sticky="ew", padx=4, pady=3)
-        ttk.Button(card_file, text="浏览", width=6, command=self._browse_srt).grid(
-            row=r, column=2, pady=3)
-        r += 1
+        file_layout.addWidget(QLabel("字幕文件"), 1, 0)
+        self._srt_edit = QLineEdit()
+        self._srt_edit.textChanged.connect(self._on_srt_changed)
+        file_layout.addWidget(self._srt_edit, 1, 1)
+        btn_srt = QPushButton("浏览")
+        btn_srt.clicked.connect(self._browse_srt)
+        file_layout.addWidget(btn_srt, 1, 2)
 
-        ttk.Label(card_file, text="输出路径").grid(row=r, column=0, sticky="w", pady=3)
-        self.out_var = tk.StringVar()
-        ttk.Entry(card_file, textvariable=self.out_var).grid(
-            row=r, column=1, sticky="ew", padx=4, pady=3)
-        ttk.Button(card_file, text="浏览", width=6, command=self._browse_output).grid(
-            row=r, column=2, pady=3)
-        card_file.columnconfigure(1, weight=1)
+        file_layout.addWidget(QLabel("输出路径"), 2, 0)
+        self._out_edit = QLineEdit()
+        file_layout.addWidget(self._out_edit, 2, 1)
+        btn_out = QPushButton("浏览")
+        btn_out.clicked.connect(self._browse_output)
+        file_layout.addWidget(btn_out, 2, 2)
 
-        card_param = ttk.LabelFrame(settings, text="参数", padding=8)
-        card_param.pack(fill="x", pady=(0, 8))
+        file_layout.setColumnStretch(1, 1)
 
-        basic_row = ttk.Frame(card_param)
-        basic_row.pack(anchor="w", pady=(0, 6))
-        ttk.Label(basic_row, text="语言").pack(side="left")
-        self.lang_var = tk.StringVar(value="ja")
-        ttk.Combobox(
-            basic_row, textvariable=self.lang_var, values=LANGUAGES,
-            state="readonly", width=6,
-        ).pack(side="left", padx=(4, 16))
-        ttk.Label(basic_row, text="设备").pack(side="left")
-        self.device_var = tk.StringVar(value="cuda")
-        ttk.Combobox(
-            basic_row, textvariable=self.device_var,
-            values=["cuda", "cpu"], state="readonly", width=6,
-        ).pack(side="left", padx=(4, 0))
+        # 参数
+        card_param = QGroupBox("参数")
+        settings_layout.addWidget(card_param)
+        param_main = QVBoxLayout(card_param)
 
-        pp_frame = ttk.Frame(card_param)
-        pp_frame.pack(fill="x")
+        basic_row = QHBoxLayout()
+        param_main.addLayout(basic_row)
+        basic_row.addWidget(QLabel("语言"))
+        self._lang_combo = QComboBox()
+        self._lang_combo.addItems(LANGUAGES)
+        self._lang_combo.setCurrentText("ja")
+        basic_row.addWidget(self._lang_combo)
+
+        basic_row.addWidget(QLabel("设备"))
+        self._device_combo = QComboBox()
+        self._device_combo.addItems(["cuda", "cpu"])
+        basic_row.addWidget(self._device_combo)
+        basic_row.addStretch()
+
+        pp_frame = QWidget()
+        param_main.addWidget(pp_frame)
         self._pp_vars = build_params_grid(pp_frame, self._PP_KEYS)
 
-        action_bar = ttk.Frame(container, padding=(12, 6))
-        action_bar.pack(fill="x")
+        settings_layout.addStretch()
 
-        btn_row = ttk.Frame(action_bar)
-        btn_row.pack(fill="x")
-        self.start_btn = ttk.Button(
-            btn_row, text="开始对齐", command=self._start,
-        )
-        self.start_btn.pack(side="right")
+        # 操作按钮
+        action_bar = QWidget()
+        main_layout.addWidget(action_bar)
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(12, 6, 12, 6)
+        action_layout.addStretch()
+        self._start_btn = QPushButton("开始对齐")
+        self._start_btn.clicked.connect(self._start)
+        action_layout.addWidget(self._start_btn)
 
-        self._progress_bar, self._status_label = make_progress_area(container)
-        ttk.Separator(container, orient="horizontal").pack(fill="x")
+        # 进度条
+        self._progress = ProgressWidget()
+        main_layout.addWidget(self._progress)
 
-        log_frame = ttk.Frame(container, padding=(12, 4, 12, 12))
-        log_frame.pack(fill="both", expand=True)
-        log_container = ttk.Frame(log_frame)
-        log_container.pack(fill="both", expand=True)
-        self.log_text, scrollbar = make_log_area(log_container)
-        self.log_text.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(sep)
+
+        # 日志区
+        self._log = LogWidget()
+        self._log.setMinimumHeight(120)
+        main_layout.addWidget(self._log, 1)
 
     def _browse_audio(self):
-        path = filedialog.askopenfilename(
-            title="选择音频文件", filetypes=AUDIO_FILETYPES,
-        )
+        filter_str = "音频文件 (*.wav *.mp3 *.flac *.ogg *.aac *.m4a);;所有文件 (*.*)"
+        path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", "", filter_str)
         if path:
-            self.audio_var.set(path)
+            self._audio_edit.setText(path)
 
     def _browse_srt(self):
-        path = filedialog.askopenfilename(
-            title="选择 SRT 字幕", filetypes=SRT_FILETYPES,
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 SRT 字幕", "", "SRT 字幕 (*.srt);;所有文件 (*.*)"
         )
         if path:
-            self.srt_var.set(path)
+            self._srt_edit.setText(path)
 
     def _browse_output(self):
-        path = filedialog.asksaveasfilename(
-            title="保存输出 SRT",
-            defaultextension=".srt", filetypes=SRT_FILETYPES,
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存输出 SRT", "", "SRT 字幕 (*.srt);;所有文件 (*.*)"
         )
         if path:
-            self.out_var.set(path)
+            self._out_edit.setText(path)
 
-    def _on_srt_changed(self, *_args):
-        srt = self.srt_var.get().strip()
-        if srt and not self.out_var.get().strip():
+    def _on_srt_changed(self, text: str):
+        srt = text.strip()
+        if srt and not self._out_edit.text().strip():
             base = srt.rsplit(".", 1)[0]
-            self.out_var.set(f"{base}_aligned.srt")
+            self._out_edit.setText(f"{base}_aligned.srt")
 
-    def _log(self, msg: str):
-        gui_log(self.log_text, msg)
+    def _log_msg(self, msg: str):
+        self._log.log(msg)
 
-    def _progress(self, pct: float, msg: str):
-        update_progress(self.parent, self._progress_bar,
-                        self._status_label, pct, msg)
+    def _update_progress(self, pct: float, msg: str):
+        self._progress.update_progress(pct, msg)
+
+    def _on_finished(self):
+        self._start_btn.setEnabled(True)
 
     def _start(self):
-        audio = self.audio_var.get().strip()
-        srt = self.srt_var.get().strip()
-        output = self.out_var.get().strip()
+        audio = self._audio_edit.text().strip()
+        srt = self._srt_edit.text().strip()
+        output = self._out_edit.text().strip()
 
         if not audio:
-            self._log("请选择音频文件")
+            self._log_msg("请选择音频文件")
             return
         if not srt:
-            self._log("请选择字幕文件")
+            self._log_msg("请选择字幕文件")
             return
         if not output:
             base = srt.rsplit(".", 1)[0]
             output = f"{base}_aligned.srt"
-            self.out_var.set(output)
+            self._out_edit.setText(output)
 
-        self.start_btn.configure(state="disabled")
-        clear_log(self.log_text)
-        reset_progress(self.parent, self._progress_bar, self._status_label)
+        self._start_btn.setEnabled(False)
+        self._log.clear_log()
+        self._progress.reset()
 
-        pp = {k: v.get() for k, v in self._pp_vars.items()}
-        lang = self.lang_var.get()
+        pp = {k: v.value() for k, v in self._pp_vars.items()}
+        lang = self._lang_combo.currentText()
+        device = self._device_combo.currentText()
+
         thread = threading.Thread(
             target=self._run_alignment,
-            args=(audio, srt, output, self.device_var.get(), pp, lang),
+            args=(audio, srt, output, device, pp, lang),
             daemon=True,
         )
         thread.start()
@@ -175,37 +194,37 @@ class AlignmentTab:
                        lang: str = "ja"):
         import torch
 
-        redirector = TextRedirector(self.log_text)
+        redirector = TextRedirector(self._log)
         old_stdout = sys.stdout
         sys.stdout = redirector
 
         try:
             if device == "cuda" and not torch.cuda.is_available():
-                self._log("CUDA 不可用，回退到 CPU")
+                self._log_msg("CUDA 不可用，回退到 CPU")
                 device = "cpu"
 
-            self._progress(0.0, "加载音频...")
+            self._update_progress(0.0, "加载音频...")
             waveform = load_audio(audio)
 
-            self._progress(0.05, "解析字幕...")
+            self._update_progress(0.05, "解析字幕...")
             subs = parse_srt(srt, lang=lang)
-            self._log(f"字幕条数: {len(subs)}")
+            self._log_msg(f"字幕条数: {len(subs)}")
 
-            self._progress(0.1, "对齐中...")
-            aligned = run_alignment(waveform, subs, device=device,
-                                    progress_callback=lambda p, m: self._progress(0.1 + p * 0.85, m))
+            self._update_progress(0.1, "对齐中...")
+            aligned = run_alignment(
+                waveform, subs, device=device,
+                progress_callback=lambda p, m: self._update_progress(0.1 + p * 0.85, m)
+            )
 
-            self._progress(0.95, "后处理...")
+            self._update_progress(0.95, "后处理...")
             pp.pop("align_conf_threshold", None)
             final = post_process(aligned, **pp)
 
             write_srt(final, output)
-            self._progress(1.0, "对齐完成")
-            self._log(f"完成! 输出: {output}")
+            self._update_progress(1.0, "对齐完成")
+            self._log_msg(f"完成! 输出: {output}")
         except Exception as e:
-            self._log(f"出错: {e}")
+            self._log_msg(f"出错: {e}")
         finally:
             sys.stdout = old_stdout
-            self.parent.after(
-                0, lambda: self.start_btn.configure(state="normal"),
-            )
+            self._signals.finished.emit()

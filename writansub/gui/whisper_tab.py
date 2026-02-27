@@ -2,180 +2,189 @@
 
 import os
 import threading
-import tkinter as tk
-from tkinter import filedialog, ttk
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
+    QLineEdit, QPushButton, QLabel, QComboBox, QCheckBox,
+    QFileDialog, QFrame, QDoubleSpinBox,
+)
+from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.core.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.whisper import transcribe_to_srt
 from writansub.config import PP_DEFAULTS, PARAM_DEFS, load_pp_config, save_pp_config
-from writansub.gui.widgets import (
-    ToolTip,
-    make_log_area, make_progress_area,
-    update_progress, reset_progress,
-    gui_log, clear_log,
-)
+from writansub.gui.widgets import LogWidget, ProgressWidget
 
 
-class WhisperTab:
+class _WhisperSignals(QObject):
+    """线程安全的信号"""
+    finished = Signal()
+
+
+class WhisperTab(QWidget):
     """Tab 2: 独立 Whisper 语音识别"""
 
-    def __init__(self, parent: ttk.Frame):
-        self.parent = parent
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._signals = _WhisperSignals()
+        self._signals.finished.connect(self._on_finished)
+        self._setup_ui()
 
-        container = ttk.Frame(parent)
-        container.pack(fill="both", expand=True)
+    def _setup_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
-        settings = ttk.Frame(container, padding=12)
-        settings.pack(fill="x")
+        settings = QWidget()
+        main_layout.addWidget(settings)
+        settings_layout = QVBoxLayout(settings)
+        settings_layout.setContentsMargins(12, 12, 12, 12)
 
-        card_file = ttk.LabelFrame(settings, text="文件", padding=8)
-        card_file.pack(fill="x", pady=(0, 8))
+        # 文件
+        card_file = QGroupBox("文件")
+        settings_layout.addWidget(card_file)
+        file_layout = QGridLayout(card_file)
 
-        r = 0
-        ttk.Label(card_file, text="媒体文件").grid(row=r, column=0, sticky="w", pady=3)
-        self.media_var = tk.StringVar()
-        self.media_var.trace_add("write", self._on_media_changed)
-        ttk.Entry(card_file, textvariable=self.media_var).grid(
-            row=r, column=1, sticky="ew", padx=4, pady=3)
-        ttk.Button(card_file, text="浏览", width=6, command=self._browse_media).grid(
-            row=r, column=2, pady=3)
-        r += 1
+        file_layout.addWidget(QLabel("媒体文件"), 0, 0)
+        self._media_edit = QLineEdit()
+        self._media_edit.textChanged.connect(self._on_media_changed)
+        file_layout.addWidget(self._media_edit, 0, 1)
+        btn_media = QPushButton("浏览")
+        btn_media.clicked.connect(self._browse_media)
+        file_layout.addWidget(btn_media, 0, 2)
 
-        ttk.Label(card_file, text="输出 SRT").grid(row=r, column=0, sticky="w", pady=3)
-        self.output_var = tk.StringVar()
-        ttk.Entry(card_file, textvariable=self.output_var).grid(
-            row=r, column=1, sticky="ew", padx=4, pady=3)
-        ttk.Button(card_file, text="浏览", width=6, command=self._browse_output).grid(
-            row=r, column=2, pady=3)
-        card_file.columnconfigure(1, weight=1)
+        file_layout.addWidget(QLabel("输出 SRT"), 1, 0)
+        self._output_edit = QLineEdit()
+        file_layout.addWidget(self._output_edit, 1, 1)
+        btn_output = QPushButton("浏览")
+        btn_output.clicked.connect(self._browse_output)
+        file_layout.addWidget(btn_output, 1, 2)
 
-        card_param = ttk.LabelFrame(settings, text="参数", padding=8)
-        card_param.pack(fill="x", pady=(0, 8))
+        file_layout.setColumnStretch(1, 1)
 
-        param_row = ttk.Frame(card_param)
-        param_row.pack(anchor="w")
-        ttk.Label(param_row, text="语言").pack(side="left")
-        self.lang_var = tk.StringVar(value="ja")
-        ttk.Combobox(
-            param_row, textvariable=self.lang_var, values=LANGUAGES,
-            state="readonly", width=6,
-        ).pack(side="left", padx=(4, 16))
-        ttk.Label(param_row, text="设备").pack(side="left")
-        self.device_var = tk.StringVar(value="cuda")
-        ttk.Combobox(
-            param_row, textvariable=self.device_var,
-            values=["cuda", "cpu"], state="readonly", width=6,
-        ).pack(side="left", padx=(4, 16))
-        lbl_wc = ttk.Label(param_row, text="置信阈值")
-        lbl_wc.pack(side="left")
+        # 参数
+        card_param = QGroupBox("参数")
+        settings_layout.addWidget(card_param)
+        param_layout = QHBoxLayout(card_param)
+
+        param_layout.addWidget(QLabel("语言"))
+        self._lang_combo = QComboBox()
+        self._lang_combo.addItems(LANGUAGES)
+        self._lang_combo.setCurrentText("ja")
+        param_layout.addWidget(self._lang_combo)
+
+        param_layout.addWidget(QLabel("设备"))
+        self._device_combo = QComboBox()
+        self._device_combo.addItems(["cuda", "cpu"])
+        param_layout.addWidget(self._device_combo)
+
+        lbl_wc = QLabel("置信阈值")
         tip_text = PARAM_DEFS["word_conf_threshold"].get("tip", "")
         if tip_text:
-            q = tk.Label(
-                param_row, text="?", fg="#4a86c8", cursor="question_arrow",
-                font=("TkDefaultFont", 9, "bold"),
-            )
-            q.pack(side="left", padx=(2, 0))
-            ToolTip(q, tip_text)
+            lbl_wc.setText("置信阈值 ⓘ")
+            lbl_wc.setToolTip(tip_text)
+            lbl_wc.setCursor(Qt.WhatsThisCursor)
+        param_layout.addWidget(lbl_wc)
+
         cfg = load_pp_config()
-        wc_var = tk.DoubleVar(
-            value=cfg.get("word_conf_threshold",
-                          PP_DEFAULTS["word_conf_threshold"]),
+        self._wc_spin = QDoubleSpinBox()
+        self._wc_spin.setRange(0.0, 1.0)
+        self._wc_spin.setSingleStep(0.05)
+        self._wc_spin.setDecimals(2)
+        self._wc_spin.setValue(cfg.get("word_conf_threshold", PP_DEFAULTS["word_conf_threshold"]))
+        self._wc_spin.valueChanged.connect(self._on_wc_change)
+        param_layout.addWidget(self._wc_spin)
+
+        self._chk_cond_prev = QCheckBox("上文关联")
+        self._chk_cond_prev.setChecked(True)
+        self._chk_cond_prev.setToolTip(
+            "开启时，前一句识别结果作为下一句的上下文，\n"
+            "提高连贯性但可能传播错误。\n"
+            "关闭可防止幻觉扩散。"
         )
-        ttk.Spinbox(
-            param_row, textvariable=wc_var,
-            from_=0.0, to=1.0, increment=0.05, width=6, format="%.2f",
-        ).pack(side="left", padx=(4, 0))
+        param_layout.addWidget(self._chk_cond_prev)
+        param_layout.addStretch()
 
-        def _on_wc_change(*_):
-            try:
-                current = load_pp_config()
-                current["word_conf_threshold"] = round(wc_var.get(), 2)
-                save_pp_config(current)
-            except (tk.TclError, ValueError):
-                pass
+        settings_layout.addStretch()
 
-        wc_var.trace_add("write", _on_wc_change)
+        # 操作按钮
+        action_bar = QWidget()
+        main_layout.addWidget(action_bar)
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(12, 6, 12, 6)
+        action_layout.addStretch()
+        self._start_btn = QPushButton("开始识别")
+        self._start_btn.clicked.connect(self._start)
+        action_layout.addWidget(self._start_btn)
 
-        self._cond_prev_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
-            param_row, text="上文关联",
-            variable=self._cond_prev_var,
-        ).pack(side="left", padx=(16, 0))
-        cond_tip = tk.Label(
-            param_row, text="?", fg="#4a86c8", cursor="question_arrow",
-            font=("TkDefaultFont", 9, "bold"),
-        )
-        cond_tip.pack(side="left", padx=(2, 0))
-        ToolTip(cond_tip, "开启时，前一句识别结果作为下一句的上下文，\n"
-                          "提高连贯性但可能传播错误。\n"
-                          "关闭可防止幻觉扩散。")
+        # 进度条
+        self._progress = ProgressWidget()
+        main_layout.addWidget(self._progress)
 
-        self._wc_vars = {"word_conf_threshold": wc_var}
+        # 分隔线
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        main_layout.addWidget(sep)
 
-        action_bar = ttk.Frame(container, padding=(12, 6))
-        action_bar.pack(fill="x")
-
-        btn_row = ttk.Frame(action_bar)
-        btn_row.pack(fill="x")
-        self.start_btn = ttk.Button(
-            btn_row, text="开始识别", command=self._start,
-        )
-        self.start_btn.pack(side="right")
-
-        self._progress_bar, self._status_label = make_progress_area(container)
-        ttk.Separator(container, orient="horizontal").pack(fill="x")
-
-        log_frame = ttk.Frame(container, padding=(12, 4, 12, 12))
-        log_frame.pack(fill="both", expand=True)
-        log_container = ttk.Frame(log_frame)
-        log_container.pack(fill="both", expand=True)
-        self.log_text, scrollbar = make_log_area(log_container)
-        self.log_text.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 日志区
+        self._log = LogWidget()
+        self._log.setMinimumHeight(120)
+        main_layout.addWidget(self._log, 1)
 
     def _browse_media(self):
-        path = filedialog.askopenfilename(filetypes=MEDIA_FILETYPES)
+        filter_str = "媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a);;所有文件 (*.*)"
+        path, _ = QFileDialog.getOpenFileName(self, "选择媒体文件", "", filter_str)
         if path:
-            self.media_var.set(path)
+            self._media_edit.setText(path)
 
     def _browse_output(self):
-        path = filedialog.asksaveasfilename(
-            defaultextension=".srt", filetypes=SRT_FILETYPES,
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存 SRT", "", "SRT 字幕 (*.srt);;所有文件 (*.*)"
         )
         if path:
-            self.output_var.set(path)
+            self._output_edit.setText(path)
 
-    def _on_media_changed(self, *_args):
-        media = self.media_var.get().strip()
-        if media and not self.output_var.get().strip():
-            self.output_var.set(os.path.splitext(media)[0] + ".srt")
+    def _on_media_changed(self, text: str):
+        media = text.strip()
+        if media and not self._output_edit.text().strip():
+            self._output_edit.setText(os.path.splitext(media)[0] + ".srt")
 
-    def _log(self, msg: str):
-        gui_log(self.log_text, msg)
+    def _on_wc_change(self, value: float):
+        try:
+            current = load_pp_config()
+            current["word_conf_threshold"] = round(value, 2)
+            save_pp_config(current)
+        except Exception:
+            pass
 
-    def _progress(self, pct: float, msg: str):
-        update_progress(self.parent, self._progress_bar,
-                        self._status_label, pct, msg)
+    def _log_msg(self, msg: str):
+        self._log.log(msg)
+
+    def _update_progress(self, pct: float, msg: str):
+        self._progress.update_progress(pct, msg)
+
+    def _on_finished(self):
+        self._start_btn.setEnabled(True)
 
     def _start(self):
-        media = self.media_var.get().strip()
+        media = self._media_edit.text().strip()
         if not media or not os.path.isfile(media):
-            self._log("请先选择有效的媒体文件")
+            self._log_msg("请先选择有效的媒体文件")
             return
 
-        output = self.output_var.get().strip()
+        output = self._output_edit.text().strip()
         if not output:
             output = os.path.splitext(media)[0] + ".srt"
-            self.output_var.set(output)
+            self._output_edit.setText(output)
 
-        self.start_btn.configure(state="disabled")
-        clear_log(self.log_text)
-        reset_progress(self.parent, self._progress_bar, self._status_label)
+        self._start_btn.setEnabled(False)
+        self._log.clear_log()
+        self._progress.reset()
 
-        lang = self.lang_var.get()
-        device = self.device_var.get()
-        wc = self._wc_vars["word_conf_threshold"].get()
-        cond_prev = self._cond_prev_var.get()
+        lang = self._lang_combo.currentText()
+        device = self._device_combo.currentText()
+        wc = self._wc_spin.value()
+        cond_prev = self._chk_cond_prev.isChecked()
 
         thread = threading.Thread(
             target=self._run_whisper,
@@ -189,18 +198,16 @@ class WhisperTab:
                      cond_prev: bool = True):
         try:
             srt_path = transcribe_to_srt(
-                media, lang=lang, device=device, log_callback=self._log,
-                progress_callback=self._progress,
+                media, lang=lang, device=device, log_callback=self._log_msg,
+                progress_callback=self._update_progress,
                 word_conf_threshold=wc_threshold,
                 condition_on_previous_text=cond_prev,
             )
             if os.path.abspath(srt_path) != os.path.abspath(output):
                 import shutil
                 shutil.move(srt_path, output)
-            self._progress(1.0, "识别完成")
+            self._update_progress(1.0, "识别完成")
         except Exception as e:
-            self._log(f"出错: {e}")
+            self._log_msg(f"出错: {e}")
         finally:
-            self.parent.after(
-                0, lambda: self.start_btn.configure(state="normal"),
-            )
+            self._signals.finished.emit()

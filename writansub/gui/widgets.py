@@ -1,9 +1,14 @@
-"""通用 GUI 控件：日志区、进度条、滚动容器、气泡提示、参数面板"""
+"""通用 PySide6 控件：日志区、进度条、滚动容器、参数面板"""
 
 import io
-import tkinter as tk
-from tkinter import ttk
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
+
+from PySide6.QtWidgets import (
+    QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
+    QHBoxLayout, QDoubleSpinBox, QGridLayout, QFrame,
+    QScrollArea, QSizePolicy,
+)
+from PySide6.QtCore import Qt, Signal, QObject
 
 from writansub.config import (
     PP_DEFAULTS, PARAM_DEFS,
@@ -11,204 +16,162 @@ from writansub.config import (
 )
 
 
-class TextRedirector(io.TextIOBase):
-    """将 print 输出重定向到 Tkinter Text 控件"""
+class _LogSignal(QObject):
+    """线程安全的日志信号"""
+    message = Signal(str)
 
-    def __init__(self, text_widget: tk.Text):
-        self.text_widget = text_widget
+
+class LogWidget(QTextEdit):
+    """日志显示区域，支持线程安全追加"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self._signal = _LogSignal()
+        self._signal.message.connect(self._append)
+
+    def log(self, msg: str):
+        """线程安全地追加日志（带换行）"""
+        self._signal.message.emit(msg)
+
+    def _append(self, msg: str):
+        self.append(msg)
+        self.verticalScrollBar().setValue(
+            self.verticalScrollBar().maximum()
+        )
+
+    def clear_log(self):
+        self.clear()
+
+
+class TextRedirector(io.TextIOBase):
+    """将 print 输出重定向到 LogWidget"""
+
+    def __init__(self, log_widget: LogWidget):
+        super().__init__()
+        self._widget = log_widget
 
     def write(self, s: str):
-        self.text_widget.after(0, self._append, s)
+        if s and s.strip():
+            self._widget.log(s.rstrip('\n'))
         return len(s)
-
-    def _append(self, s: str):
-        self.text_widget.configure(state="normal")
-        self.text_widget.insert(tk.END, s)
-        self.text_widget.see(tk.END)
-        self.text_widget.configure(state="disabled")
 
     def flush(self):
         pass
 
 
-def make_log_area(parent, height: int = 8) -> Tuple[tk.Text, ttk.Scrollbar]:
-    """创建日志文本区域 + 滚动条，返回 (text_widget, scrollbar)"""
-    log_text = tk.Text(parent, height=height, state="disabled", wrap="word")
-    scrollbar = ttk.Scrollbar(parent, orient="vertical", command=log_text.yview)
-    log_text.configure(yscrollcommand=scrollbar.set)
-    return log_text, scrollbar
+class _ProgressSignal(QObject):
+    """线程安全的进度信号"""
+    progress = Signal(float, str)
 
 
-def make_progress_area(parent) -> Tuple[ttk.Progressbar, ttk.Label]:
-    """创建进度条 + 状态标签，返回 (progressbar, status_label)"""
-    frame = ttk.Frame(parent, padding=(12, 4))
-    frame.pack(fill="x")
-    status = ttk.Label(frame, text="就绪")
-    status.pack(side="left")
-    pct_label = ttk.Label(frame, text="")
-    pct_label.pack(side="right")
-    bar = ttk.Progressbar(parent, mode="determinate", maximum=100)
-    bar.pack(fill="x", padx=12, pady=(0, 4))
-    bar._pct_label = pct_label  # type: ignore[attr-defined]
-    return bar, status
+class ProgressWidget(QWidget):
+    """进度条 + 状态标签"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 4, 12, 4)
+
+        self._status = QLabel("就绪")
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._pct = QLabel("")
+        self._pct.setMinimumWidth(40)
+        self._pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        layout.addWidget(self._status)
+        layout.addWidget(self._bar, 1)
+        layout.addWidget(self._pct)
+
+        self._signal = _ProgressSignal()
+        self._signal.progress.connect(self._update)
+
+    def update_progress(self, pct: float, msg: str):
+        """线程安全地更新进度"""
+        self._signal.progress.emit(pct, msg)
+
+    def _update(self, pct: float, msg: str):
+        self._bar.setValue(int(pct * 100))
+        self._status.setText(msg)
+        self._pct.setText(f"{int(pct * 100)}%" if pct > 0 else "")
+
+    def reset(self):
+        self._bar.setValue(0)
+        self._status.setText("就绪")
+        self._pct.setText("")
 
 
-def update_progress(widget: tk.Widget, bar: ttk.Progressbar,
-                    status_label: ttk.Label, pct: float, msg: str):
-    """线程安全地更新进度条和状态标签"""
-    def _do():
-        bar['value'] = pct * 100
-        status_label.configure(text=msg)
-        pct_label = getattr(bar, '_pct_label', None)
-        if pct_label:
-            pct_label.configure(text=f"{int(pct * 100)}%" if pct > 0 else "")
-    widget.after(0, _do)
-
-
-def reset_progress(widget: tk.Widget, bar: ttk.Progressbar,
-                   status_label: ttk.Label):
-    """重置进度条"""
-    def _do():
-        bar['value'] = 0
-        status_label.configure(text="就绪")
-        pct_label = getattr(bar, '_pct_label', None)
-        if pct_label:
-            pct_label.configure(text="")
-    widget.after(0, _do)
-
-
-def gui_log(text_widget: tk.Text, msg: str):
-    """线程安全地向 Text 控件追加一行日志"""
-    def _append():
-        text_widget.configure(state="normal")
-        text_widget.insert(tk.END, msg + "\n")
-        text_widget.see(tk.END)
-        text_widget.configure(state="disabled")
-    text_widget.after(0, _append)
-
-
-def clear_log(text_widget: tk.Text):
-    """清空日志区域"""
-    text_widget.configure(state="normal")
-    text_widget.delete("1.0", tk.END)
-    text_widget.configure(state="disabled")
-
-
-class ScrollableFrame(ttk.Frame):
+class ScrollableFrame(QScrollArea):
     """可垂直滚动的容器，内容放入 self.inner"""
 
-    def __init__(self, parent):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self._canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
-        self._scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
-        self.inner = ttk.Frame(self._canvas)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        self.inner.bind("<Configure>", self._on_inner_configure)
-        self._canvas.bind("<Configure>", self._on_canvas_configure)
-
-        self._canvas_window = self._canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        self._canvas.configure(yscrollcommand=self._scrollbar.set)
-
-        self._canvas.pack(side="left", fill="both", expand=True)
-        self._scrollbar.pack(side="right", fill="y")
-
-        self.inner.bind("<Enter>", self._bind_mousewheel)
-        self.inner.bind("<Leave>", self._unbind_mousewheel)
-
-    def _on_inner_configure(self, _event):
-        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
-
-    def _on_canvas_configure(self, event):
-        self._canvas.itemconfigure(self._canvas_window, width=event.width)
-
-    def _bind_mousewheel(self, _event):
-        self._canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-
-    def _unbind_mousewheel(self, _event):
-        self._canvas.unbind_all("<MouseWheel>")
-
-    def _on_mousewheel(self, event):
-        self._canvas.yview_scroll(-1 * (event.delta // 120), "units")
+        self.inner = QWidget()
+        self.setWidget(self.inner)
 
 
-class ToolTip:
-    """鼠标悬停提示框"""
+class ParamSpinBox(QDoubleSpinBox):
+    """参数 SpinBox，值变化时自动保存配置"""
 
-    def __init__(self, widget: tk.Widget, text: str):
-        self.widget = widget
-        self.text = text
-        self.tip_window: Optional[tk.Toplevel] = None
-        widget.bind("<Enter>", self._show)
-        widget.bind("<Leave>", self._hide)
+    def __init__(self, key: str, parent=None):
+        super().__init__(parent)
+        self._key = key
+        self.valueChanged.connect(self._on_change)
 
-    def _show(self, event=None):
-        if self.tip_window:
-            return
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 2
-        self.tip_window = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
-        tk.Label(
-            tw, text=self.text, justify="left",
-            background="#ffffe0", relief="solid", borderwidth=1,
-            font=("TkDefaultFont", 9),
-        ).pack()
-
-    def _hide(self, event=None):
-        if self.tip_window:
-            self.tip_window.destroy()
-            self.tip_window = None
+    def _on_change(self, value: float):
+        try:
+            current = load_pp_config()
+            current[self._key] = round(value, 2)
+            save_pp_config(current)
+        except Exception:
+            pass
 
 
-def build_params_grid(
-    parent, keys: List[str],
-) -> Dict[str, tk.DoubleVar]:
+def build_params_grid(parent: QWidget, keys: List[str]) -> Dict[str, QDoubleSpinBox]:
     """
     在 parent 中创建 2 列参数网格。
 
     Args:
-        parent: 父控件 (LabelFrame 等)
+        parent: 父控件
         keys: 要显示的参数 key 列表 (对应 PARAM_DEFS)
 
     Returns:
-        {key: DoubleVar} 变量字典，值变化时自动保存到配置文件
+        {key: QDoubleSpinBox} 字典
     """
     cfg = load_pp_config()
-    pp: Dict[str, tk.DoubleVar] = {}
+
+    layout = parent.layout()
+    if layout is None:
+        layout = QGridLayout(parent)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+    spinboxes: Dict[str, QDoubleSpinBox] = {}
 
     for i, key in enumerate(keys):
         defn = PARAM_DEFS[key]
-        r = i // 2
-        c = (i % 2) * 2
+        row = i // 2
+        col = (i % 2) * 2
 
-        lf = ttk.Frame(parent)
-        lf.grid(row=r, column=c, sticky="e", padx=(0, 4), pady=3)
-        ttk.Label(lf, text=defn["label"]).pack(side="left")
+        label = QLabel(defn["label"])
         if defn.get("tip"):
-            q = tk.Label(
-                lf, text="?", fg="#4a86c8", cursor="question_arrow",
-                font=("TkDefaultFont", 9, "bold"),
-            )
-            q.pack(side="left", padx=(2, 0))
-            ToolTip(q, defn["tip"])
+            label.setToolTip(defn["tip"])
+            label.setText(defn["label"] + " ⓘ")
+            label.setCursor(Qt.WhatsThisCursor)
+        layout.addWidget(label, row, col)
 
-        pp[key] = tk.DoubleVar(value=cfg.get(key, PP_DEFAULTS[key]))
-        ttk.Spinbox(
-            parent, textvariable=pp[key],
-            from_=defn["from"], to=defn["to"], increment=defn["inc"],
-            width=8, format="%.2f",
-        ).grid(row=r, column=c + 1, sticky="w", padx=(0, 16), pady=3)
+        spin = ParamSpinBox(key)
+        spin.setRange(defn["from"], defn["to"])
+        spin.setSingleStep(defn["inc"])
+        spin.setDecimals(2)
+        spin.setValue(cfg.get(key, PP_DEFAULTS[key]))
+        spin.setFixedWidth(80)
+        layout.addWidget(spin, row, col + 1)
 
-    def _on_change(*_):
-        try:
-            current = load_pp_config()
-            current.update({k: round(v.get(), 2) for k, v in pp.items()})
-            save_pp_config(current)
-        except (tk.TclError, ValueError):
-            pass
+        spinboxes[key] = spin
 
-    for var in pp.values():
-        var.trace_add("write", _on_change)
-
-    return pp
+    return spinboxes
