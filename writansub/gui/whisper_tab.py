@@ -11,8 +11,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.core.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
-from writansub.core.whisper import transcribe_to_srt
+from writansub.core.whisper import transcribe
+from writansub.core.review import generate_review, write_review_files
+from writansub.core.srt_io import write_srt
 from writansub.config import PP_DEFAULTS, PARAM_DEFS, load_pp_config, save_pp_config, load_gui_state, save_gui_state
+from writansub.registry import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget
 
 
@@ -226,23 +229,35 @@ class WhisperTab(QWidget):
             args=(media, output, lang, device, wc, cond_prev),
             daemon=True,
         )
+        reg = ResourceRegistry.instance()
+        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_whisper(self, media: str, output: str, lang: str,
                      device: str, wc_threshold: float,
                      cond_prev: bool = True):
         try:
-            srt_path = transcribe_to_srt(
+            subs, word_data = transcribe(
                 media, lang=lang, device=device, log_callback=self._log_msg,
                 progress_callback=self._update_progress,
-                word_conf_threshold=wc_threshold,
                 condition_on_previous_text=cond_prev,
             )
-            if os.path.abspath(srt_path) != os.path.abspath(output):
-                import shutil
-                shutil.move(srt_path, output)
+
+            # 生成 review 文件
+            if wc_threshold > 0.0:
+                srt_content, ass_content, low_count, total_words = generate_review(
+                    subs, word_data, wc_threshold,
+                )
+                if low_count > 0:
+                    base = os.path.splitext(media)[0]
+                    write_review_files(base, srt_content, ass_content)
+                    self._log_msg(f"低置信词 {low_count}/{total_words}，已生成标记版")
+
+            # 直接写到用户指定路径
+            write_srt(subs, output)
             self._update_progress(1.0, "识别完成")
         except Exception as e:
             self._log_msg(f"出错: {e}")
         finally:
+            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()

@@ -1,6 +1,7 @@
 """公共数据类型：Sub 字幕结构体、语言列表、文件类型常量、时间格式化"""
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 MEDIA_FILETYPES = [
     ("媒体文件", "*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a"),
@@ -25,6 +26,12 @@ TRANSLATE_TARGETS = [
 ]
 
 
+class WordInfo(NamedTuple):
+    """词级别识别信息，用于 review 标记"""
+    word: str
+    probability: float
+
+
 @dataclass
 class Sub:
     """一条字幕"""
@@ -34,6 +41,7 @@ class Sub:
     text: str           # 原始文本
     romaji: str = ""    # 罗马音（用于 alignment）
     score: float = 0.0  # 对齐置信度
+    translated: str = ""  # 翻译文本
 
 
 def fmt_srt_time(seconds: float) -> str:

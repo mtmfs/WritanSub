@@ -1,12 +1,14 @@
-"""AI 翻译：调用 OpenAI 兼容 API 翻译 SRT 字幕"""
+"""AI 翻译：调用 OpenAI 兼容 API 翻译字幕"""
 
 import os
 import re
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
+
+from writansub.core.types import Sub
 
 
-def translate_srt(
-    srt_path: str,
+def translate_subs(
+    subs: List[Sub],
     target_lang: str,
     api_base: str,
     api_key: str,
@@ -15,25 +17,27 @@ def translate_srt(
     log_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     cancelled: Optional[Callable[[], bool]] = None,
-) -> str:
+) -> List[Sub]:
     """
-    使用 OpenAI 兼容 API 翻译 SRT 字幕文件。
+    使用 OpenAI 兼容 API 翻译字幕列表（内存操作）。
+
+    翻译结果写入每条 Sub 的 translated 字段。
 
     Args:
-        srt_path: 输入 SRT 文件路径
+        subs: 输入字幕列表
         target_lang: 目标语言 (如 "简体中文", "English")
         api_base: API 地址
         api_key: API Key
         model: 模型名
         batch_size: 每批翻译条数
         log_callback: 日志回调
+        progress_callback: 进度回调
         cancelled: 取消检查回调
 
     Returns:
-        翻译后的 SRT 文件路径
+        同一 subs 列表（translated 字段已填充）
     """
     from openai import OpenAI
-    import pysrt
 
     def _log(msg: str):
         if log_callback:
@@ -43,7 +47,6 @@ def translate_srt(
         return cancelled() if cancelled else False
 
     client = OpenAI(base_url=api_base, api_key=api_key)
-    subs = pysrt.open(srt_path, encoding="utf-8")
     total = len(subs)
 
     _log(f"共 {total} 条字幕")
@@ -97,15 +100,68 @@ def translate_srt(
         except Exception as e:
             _log(f"  批次翻译出错: {e}")
 
-    output_path = os.path.splitext(srt_path)[0] + "_translated.srt"
-    with open(output_path, "w", encoding="utf-8") as f:
-        for s in subs:
-            text = translated.get(s.index, s.text.replace("\n", " ").strip())
-            f.write(f"{s.index}\n")
-            f.write(f"{s.start} --> {s.end}\n")
-            f.write(f"{text}\n\n")
+    # 写入 Sub.translated 字段
+    for s in subs:
+        if s.index in translated:
+            s.translated = translated[s.index]
 
     if progress_callback:
         progress_callback(1.0, "翻译完成")
     _log(f"翻译完成 {len(translated)}/{total} 条")
+    return subs
+
+
+def translate_srt(
+    srt_path: str,
+    target_lang: str,
+    api_base: str,
+    api_key: str,
+    model: str,
+    batch_size: int = 20,
+    log_callback: Optional[Callable[[str], None]] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
+) -> str:
+    """
+    兼容 wrapper：从 SRT 文件读取、翻译、写回磁盘。
+
+    Returns:
+        翻译后的 SRT 文件路径
+    """
+    from writansub.core.srt_io import parse_srt, write_srt
+    from writansub.core.types import fmt_srt_time
+
+    import pysrt
+
+    srt_subs = pysrt.open(srt_path, encoding="utf-8")
+    subs = [
+        Sub(
+            index=s.index,
+            start=s.start.ordinal / 1000.0,
+            end=s.end.ordinal / 1000.0,
+            text=s.text.replace("\n", " ").strip(),
+        )
+        for s in srt_subs
+    ]
+
+    translate_subs(
+        subs,
+        target_lang=target_lang,
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        batch_size=batch_size,
+        log_callback=log_callback,
+        progress_callback=progress_callback,
+        cancelled=cancelled,
+    )
+
+    output_path = os.path.splitext(srt_path)[0] + "_translated.srt"
+    with open(output_path, "w", encoding="utf-8") as f:
+        for s in subs:
+            text = s.translated if s.translated else s.text
+            f.write(f"{s.index}\n")
+            f.write(f"{fmt_srt_time(s.start)} --> {fmt_srt_time(s.end)}\n")
+            f.write(f"{text}\n\n")
+
     return output_path

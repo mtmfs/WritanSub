@@ -12,8 +12,9 @@ from PySide6.QtCore import Signal, QObject
 
 from writansub.core.types import AUDIO_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.srt_io import parse_srt, write_srt
-from writansub.core.alignment import load_audio, run_alignment, post_process
+from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
 from writansub.config import load_gui_state, save_gui_state
+from writansub.registry import ResourceRegistry
 from writansub.gui.widgets import TextRedirector, LogWidget, ProgressWidget, build_params_grid
 
 
@@ -223,6 +224,8 @@ class AlignmentTab(QWidget):
             args=(audio, srt, output, device, pp, lang),
             daemon=True,
         )
+        reg = ResourceRegistry.instance()
+        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_alignment(self, audio: str, srt: str, output: str,
@@ -234,6 +237,8 @@ class AlignmentTab(QWidget):
         old_stdout = sys.stdout
         sys.stdout = redirector
 
+        reg = ResourceRegistry.instance()
+        model_handle = None
         try:
             if device == "cuda" and not torch.cuda.is_available():
                 self._log_msg("CUDA 不可用，回退到 CPU")
@@ -246,10 +251,14 @@ class AlignmentTab(QWidget):
             subs = parse_srt(srt, lang=lang)
             self._log_msg(f"字幕条数: {len(subs)}")
 
-            self._update_progress(0.1, "对齐中...")
+            self._update_progress(0.1, "加载模型...")
+            model_bundle = init_model(device)
+            model_handle = reg.register_model("mms_fa", model_bundle, device)
+
             aligned = run_alignment(
                 waveform, subs, device=device,
-                progress_callback=lambda p, m: self._update_progress(0.1 + p * 0.85, m)
+                progress_callback=lambda p, m: self._update_progress(0.1 + p * 0.85, m),
+                model_bundle=model_bundle,
             )
 
             self._update_progress(0.95, "后处理...")
@@ -262,5 +271,8 @@ class AlignmentTab(QWidget):
         except Exception as e:
             self._log_msg(f"出错: {e}")
         finally:
+            if model_handle is not None:
+                reg.unload_model(model_handle)
             sys.stdout = old_stdout
+            reg.unregister_thread(self._thread_handle)
             self._signals.finished.emit()

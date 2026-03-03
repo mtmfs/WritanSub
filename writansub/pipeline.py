@@ -5,7 +5,8 @@ import os
 from typing import Any, Callable, Dict, List, Optional
 
 from writansub.core.types import Sub
-from writansub.core.srt_io import parse_srt, write_srt, mark_low_align_in_review
+from writansub.core.srt_io import parse_srt, write_srt
+from writansub.core.review import mark_low_align_in_review
 from writansub.core.whisper import transcribe_to_srt
 from writansub.core.alignment import load_audio, run_alignment, post_process
 from writansub.core.translate import translate_srt
@@ -76,14 +77,6 @@ class WhisperStep(PipelineStep):
             word_conf_threshold=self.word_conf_threshold,
             condition_on_previous_text=self.condition_on_previous_text,
         )
-        import gc
-        gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
         return {"srt": srt_path, "media_file": media_file}
 
     def get_intermediate_files(self, inputs, outputs):
@@ -149,14 +142,6 @@ class ForceAlignStep(PipelineStep):
             if low_align:
                 mark_low_align_in_review(base, low_align)
                 log_callback(f"低置信对齐 {len(low_align)} 句，已标记")
-
-        import gc
-        gc.collect()
-        try:
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
 
         return {"aligned_srt": output_path}
 

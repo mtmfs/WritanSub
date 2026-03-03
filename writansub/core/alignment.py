@@ -92,7 +92,8 @@ def load_audio(path: str):
         "-f", "s16le", "-ac", "1", "-ar", str(bundle.sample_rate),
         "-loglevel", "error", "-",
     ]
-    proc = subprocess.run(cmd, capture_output=True, timeout=300)
+    from writansub.registry import ResourceRegistry
+    proc = ResourceRegistry.instance().run_subprocess(cmd, timeout=300)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg 解码失败: {proc.stderr.decode(errors='replace')}")
 

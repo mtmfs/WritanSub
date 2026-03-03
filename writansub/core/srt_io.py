@@ -1,7 +1,5 @@
-"""SRT 读写：parse_srt、write_srt、review 标记"""
+"""SRT 读写：parse_srt、write_srt、populate_romaji、merge_bilingual"""
 
-import os
-import re
 from typing import List
 
 from writansub.core.types import Sub, fmt_srt_time
@@ -35,56 +33,32 @@ def write_srt(subs: List[Sub], path: str):
             f.write(f"{sub.text}\n\n")
 
 
-def mark_low_align_in_review(base: str, low_indices: set):
-    """在已有的 _review.srt / _review.ass 中给低分句子加【】标记。"""
-    review_srt = f"{base}_review.srt"
-    review_ass = f"{base}_review.ass"
+def populate_romaji(subs: List[Sub], lang: str) -> None:
+    """为 Sub 列表填充 romaji 字段（原地修改）。"""
+    from writansub.core.alignment import text_to_romaji
 
-    if os.path.isfile(review_srt):
-        try:
-            with open(review_srt, "r", encoding="utf-8") as f:
-                content = f.read()
-            blocks = re.split(r"\n\n+", content.strip())
-            new_blocks = []
-            for block in blocks:
-                lines = block.split("\n")
-                if len(lines) >= 3:
-                    try:
-                        idx = int(lines[0].strip())
-                    except ValueError:
-                        new_blocks.append(block)
-                        continue
-                    if idx in low_indices:
-                        text = "\n".join(lines[2:])
-                        if not text.startswith("【"):
-                            text = f"【{text}】"
-                        lines = lines[:2] + [text]
-                        block = "\n".join(lines)
-                new_blocks.append(block)
-            with open(review_srt, "w", encoding="utf-8") as f:
-                f.write("\n\n".join(new_blocks) + "\n\n")
-        except OSError:
-            pass
+    for sub in subs:
+        if not sub.romaji:
+            sub.romaji = text_to_romaji(sub.text, lang)
 
-    if os.path.isfile(review_ass):
-        try:
-            with open(review_ass, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            dialogue_idx = 0
-            new_lines = []
-            for line in lines:
-                if line.startswith("Dialogue:"):
-                    dialogue_idx += 1
-                    if dialogue_idx in low_indices:
-                        pos = line.rfind(",,")
-                        if pos >= 0:
-                            prefix = line[:pos + 2]
-                            text = line[pos + 2:].rstrip("\n")
-                            if not text.startswith("【"):
-                                text = f"【{text}】"
-                            line = f"{prefix}{text}\n"
-                new_lines.append(line)
-            with open(review_ass, "w", encoding="utf-8-sig") as f:
-                f.writelines(new_lines)
-        except OSError:
-            pass
+
+def merge_bilingual(subs: List[Sub]) -> List[Sub]:
+    """合并 text + translated 为双语字幕，返回新 Sub 列表。
+
+    每条字幕的 text 变为 "原文\\n译文" 格式。
+    """
+    result = []
+    for sub in subs:
+        merged_text = sub.text
+        if sub.translated:
+            merged_text = f"{sub.text}\n{sub.translated}"
+        result.append(Sub(
+            index=sub.index,
+            start=sub.start,
+            end=sub.end,
+            text=merged_text,
+            romaji=sub.romaji,
+            score=sub.score,
+            translated=sub.translated,
+        ))
+    return result

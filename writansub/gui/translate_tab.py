@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, QObject
 
 from writansub.core.types import SRT_FILETYPES, TRANSLATE_TARGETS
-from writansub.core.translate import translate_srt
+from writansub.core.srt_io import parse_srt, write_srt
+from writansub.core.translate import translate_subs
 from writansub.config import load_translate_config, save_translate_config, load_gui_state, save_gui_state
+from writansub.registry import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget
 
 
@@ -223,12 +225,15 @@ class TranslateTab(QWidget):
             args=(srt, output, cfg),
             daemon=True,
         )
+        reg = ResourceRegistry.instance()
+        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_translate(self, srt: str, output: str, cfg: Dict[str, str]):
         try:
-            result_path = translate_srt(
-                srt,
+            subs = parse_srt(srt)
+            translate_subs(
+                subs,
                 target_lang=cfg["target_lang"],
                 api_base=cfg["api_base"],
                 api_key=cfg["api_key"],
@@ -236,11 +241,24 @@ class TranslateTab(QWidget):
                 log_callback=self._log_msg,
                 progress_callback=self._update_progress,
             )
-            if os.path.abspath(result_path) != os.path.abspath(output):
-                import shutil
-                shutil.move(result_path, output)
+
+            # 写翻译结果到用户指定路径
+            # 用 translated 字段替换 text 用于输出
+            from writansub.core.types import Sub
+            output_subs = []
+            for s in subs:
+                output_subs.append(Sub(
+                    index=s.index,
+                    start=s.start,
+                    end=s.end,
+                    text=s.translated if s.translated else s.text,
+                    romaji=s.romaji,
+                    score=s.score,
+                ))
+            write_srt(output_subs, output)
             self._update_progress(1.0, "翻译完成")
         except Exception as e:
             self._log_msg(f"出错: {e}")
         finally:
+            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()

@@ -42,7 +42,10 @@ class MainWindow(QMainWindow):
             self.pipeline_tab.set_media_path(initial_media)
 
     def closeEvent(self, event):
-        """关闭时收集所有 tab 状态并保存（兜底）"""
+        """关闭时：停止所有资源 → 保存 GUI 状态"""
+        from writansub.registry import ResourceRegistry
+        ResourceRegistry.instance().shutdown()
+
         state = load_gui_state()
         state.update(self.pipeline_tab.save_state())
         state.update(self.whisper_tab.save_state())

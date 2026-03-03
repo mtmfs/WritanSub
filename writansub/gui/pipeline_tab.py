@@ -1,6 +1,5 @@
-"""一键流水线页：批量处理，两阶段模型管理"""
+"""一键流水线页：批量处理，内存数据流 + 模型池"""
 
-import gc
 import os
 import sys
 import threading
@@ -13,40 +12,18 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject
 
-from writansub.core.types import MEDIA_FILETYPES, LANGUAGES
-from writansub.core.srt_io import parse_srt, write_srt, mark_low_align_in_review
-from writansub.core.whisper import transcribe_to_srt, _keep_alive
+from writansub.core.types import MEDIA_FILETYPES, LANGUAGES, Sub, WordInfo
+from writansub.core.srt_io import write_srt, populate_romaji, merge_bilingual
+from writansub.core.whisper import transcribe
+from writansub.core.review import generate_review, write_review_files, mark_low_align_in_review
 from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
+from writansub.core.translate import translate_subs
 from writansub.pipeline import PipelineOrchestrator
 from writansub.config import load_gui_state, save_gui_state, load_translate_config
-from writansub.core.translate import translate_srt
+from writansub.registry import ResourceRegistry
 from writansub.gui.widgets import (
     TextRedirector, ScrollableFrame, LogWidget, ProgressWidget, build_params_grid,
 )
-
-
-def _merge_bilingual(orig_path: str, trans_path: str, out_path: str):
-    """读取原文和译文 SRT，逐条合并为双语字幕写出"""
-    import re
-    _ENTRY = re.compile(
-        r"(\d+)\s*\n"
-        r"(\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3})\s*\n"
-        r"(.*?)(?=\n\n|\n*$)",
-        re.DOTALL,
-    )
-
-    def _parse(path):
-        with open(path, "r", encoding="utf-8-sig") as f:
-            text = f.read().strip()
-        return [(m.group(2), m.group(3).strip()) for m in _ENTRY.finditer(text)]
-
-    orig = _parse(orig_path)
-    trans = _parse(trans_path)
-
-    with open(out_path, "w", encoding="utf-8") as f:
-        for i, (orig_entry, trans_entry) in enumerate(zip(orig, trans), 1):
-            ts = orig_entry[0]
-            f.write(f"{i}\n{ts}\n{orig_entry[1]}\n{trans_entry[1]}\n\n")
 
 
 class _PipelineSignals(QObject):
@@ -56,7 +33,7 @@ class _PipelineSignals(QObject):
 
 
 class PipelineTab(QWidget):
-    """Tab 1: 一键流水线 (Whisper → ForceAlign)"""
+    """Tab 1: 一键流水线 (Whisper → ForceAlign → Translate)"""
 
     _PP_KEYS = [
         "extend_end", "extend_start", "gap_threshold",
@@ -305,6 +282,8 @@ class PipelineTab(QWidget):
                   align_device, retention, pp, cond_prev, translate_cfg),
             daemon=True,
         )
+        reg = ResourceRegistry.instance()
+        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _cancel(self):
@@ -330,10 +309,12 @@ class PipelineTab(QWidget):
         ac_threshold = pp.pop("align_conf_threshold", 0.50)
 
         num_phases = 3 if translate_cfg else 2
+        reg = ResourceRegistry.instance()
 
         try:
             total = len(media_files)
-            srt_results: Dict[str, str] = {}
+            sub_results: Dict[str, List[Sub]] = {}
+            word_results: Dict[str, List[List[WordInfo]]] = {}
 
             # ── 阶段 1: Whisper 语音识别 ──
             self._log_msg(f"── 阶段 1/{num_phases}: Whisper 语音识别 ──")
@@ -347,10 +328,13 @@ class PipelineTab(QWidget):
                     self._log_msg("CUDA 不可用，Whisper 回退到 CPU")
                     w_device = "cpu"
 
-            from faster_whisper import WhisperModel
-            self._log_msg("加载 Whisper 模型...")
-            whisper_model = WhisperModel("large-v3", device=w_device,
-                                         compute_type="int8")
+            def _whisper_factory():
+                from faster_whisper import WhisperModel
+                self._log_msg("加载 Whisper 模型...")
+                return WhisperModel("large-v3", device=w_device, compute_type="int8")
+
+            wh = reg.acquire_model("whisper", w_device, _whisper_factory)
+            whisper_model = reg.get_model(wh)
 
             for idx, media in enumerate(media_files, 1):
                 if self._cancelled:
@@ -364,33 +348,42 @@ class PipelineTab(QWidget):
                     self._update_progress(overall, f"[Whisper {_idx}/{total}] {msg}")
 
                 try:
-                    srt_path = transcribe_to_srt(
+                    subs, word_data = transcribe(
                         media,
                         lang=lang,
                         device=w_device,
                         log_callback=self._log_msg,
                         progress_callback=_w_progress,
-                        word_conf_threshold=wc_threshold,
                         condition_on_previous_text=cond_prev,
                         model=whisper_model,
                     )
-                    srt_results[media] = srt_path
+                    sub_results[media] = subs
+                    word_results[media] = word_data
+
+                    # review 文件
+                    if wc_threshold > 0.0:
+                        srt_content, ass_content, low_count, total_words = generate_review(
+                            subs, word_data, wc_threshold,
+                        )
+                        if low_count > 0:
+                            base = os.path.splitext(media)[0]
+                            write_review_files(base, srt_content, ass_content)
+                            self._log_msg(f"低置信词 {low_count}/{total_words}，已生成标记版")
+
+                    # 保留中间文件
+                    if retention.get("whisper", False):
+                        whisper_srt = os.path.splitext(media)[0] + ".srt"
+                        write_srt(subs, whisper_srt)
+                        self._log_msg(f"保留: {os.path.basename(whisper_srt)}")
+
                 except Exception as e:
                     self._log_msg(f"文件处理出错: {e}")
 
-            # 释放 Whisper 模型
-            _keep_alive.append(whisper_model)
-            del whisper_model
-            gc.collect()
-            try:
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
+            reg.release_model(wh)
 
             # ── 阶段 2: MMS_FA 强制打轴 ──
-            aligned_results: Dict[str, str] = {}
-            if srt_results and not self._cancelled:
+            aligned_results: Dict[str, List[Sub]] = {}
+            if sub_results and not self._cancelled:
                 self._log_msg(f"── 阶段 2/{num_phases}: MMS_FA 强制打轴 ──")
 
                 a_device = align_device
@@ -398,18 +391,22 @@ class PipelineTab(QWidget):
                     self._log_msg("CUDA 不可用，回退到 CPU")
                     a_device = "cpu"
 
-                self._log_msg("加载 MMS_FA 模型...")
-                mms_bundle = init_model(a_device)
+                def _mms_factory():
+                    self._log_msg("加载 MMS_FA 模型...")
+                    return init_model(a_device)
+
+                mh = reg.acquire_model("mms_fa", a_device, _mms_factory)
+                mms_bundle = reg.get_model(mh)
 
                 for idx, media in enumerate(media_files, 1):
                     if self._cancelled:
                         self._log_msg("已取消")
                         break
 
-                    if media not in srt_results:
+                    if media not in sub_results:
                         continue
 
-                    srt_path = srt_results[media]
+                    subs = sub_results[media]
                     self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                     def _a_progress(pct, msg, _idx=idx):
@@ -418,7 +415,7 @@ class PipelineTab(QWidget):
 
                     try:
                         waveform = load_audio(media)
-                        subs = parse_srt(srt_path, lang=lang)
+                        populate_romaji(subs, lang)
                         self._log_msg(f"字幕 {len(subs)} 条，设备: {a_device}")
 
                         aligned = run_alignment(
@@ -428,45 +425,34 @@ class PipelineTab(QWidget):
                         )
 
                         final = post_process(aligned, **pp)
+                        aligned_results[media] = final
 
-                        base = srt_path.rsplit('.', 1)[0]
-                        output_path = f"{base}_aligned.srt"
-                        write_srt(final, output_path)
-                        aligned_results[media] = output_path
-
+                        # review 低置信对齐标记
                         if ac_threshold > 0:
                             low_align = {
                                 s.index for s in final
                                 if s.score < ac_threshold
                             }
                             if low_align:
+                                base = os.path.splitext(media)[0]
                                 mark_low_align_in_review(base, low_align)
                                 self._log_msg(
                                     f"低置信对齐 {len(low_align)} 句，已标记"
                                 )
 
-                        # 清理中间文件
-                        if not retention.get("whisper", False):
-                            if srt_path and os.path.isfile(srt_path):
-                                try:
-                                    os.remove(srt_path)
-                                    self._log_msg(
-                                        f"已清理: {os.path.basename(srt_path)}"
-                                    )
-                                except OSError:
-                                    pass
+                        # 保留中间文件
+                        if retention.get("force_align", False):
+                            align_srt = os.path.splitext(media)[0] + "_aligned.srt"
+                            write_srt(final, align_srt)
+                            self._log_msg(f"保留: {os.path.basename(align_srt)}")
 
                     except Exception as e:
                         self._log_msg(f"文件处理出错: {e}")
 
-                # 释放 MMS_FA 模型
-                del mms_bundle
-                gc.collect()
-                try:
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
+                reg.release_model(mh)
+
+            # Phase 1+2 结束，flush 所有模型释放 GPU
+            reg.flush_models()
 
             # ── 阶段 3: AI 翻译（可选）──
             if translate_cfg and aligned_results and not self._cancelled:
@@ -477,16 +463,17 @@ class PipelineTab(QWidget):
                         break
                     if media not in aligned_results:
                         continue
-                    aligned_path = aligned_results[media]
-                    self._log_msg(f"[{idx}/{total}] 翻译 {os.path.basename(aligned_path)}")
+
+                    final_subs = aligned_results[media]
+                    self._log_msg(f"[{idx}/{total}] 翻译 {os.path.basename(media)}")
 
                     def _t_progress(pct, msg, _idx=idx):
                         overall = (total * 2 + (_idx - 1) + pct) / (total * num_phases)
                         self._update_progress(overall, f"[翻译 {_idx}/{total}] {msg}")
 
                     try:
-                        translated_path = translate_srt(
-                            aligned_path,
+                        translate_subs(
+                            final_subs,
                             target_lang=translate_cfg["target_lang"],
                             api_base=translate_cfg["api_base"],
                             api_key=translate_cfg["api_key"],
@@ -494,12 +481,18 @@ class PipelineTab(QWidget):
                             log_callback=self._log_msg,
                             progress_callback=_t_progress,
                         )
-                        # 合并双语字幕，输出同名 .srt
+                        bilingual = merge_bilingual(final_subs)
                         bilingual_path = os.path.splitext(media)[0] + ".srt"
-                        _merge_bilingual(aligned_path, translated_path, bilingual_path)
+                        write_srt(bilingual, bilingual_path)
                         self._log_msg(f"双语字幕: {os.path.basename(bilingual_path)}")
                     except Exception as e:
                         self._log_msg(f"翻译出错: {e}")
+
+            # 无翻译时直接输出
+            if not translate_cfg and aligned_results and not self._cancelled:
+                for media, final_subs in aligned_results.items():
+                    output_path = os.path.splitext(media)[0] + ".srt"
+                    write_srt(final_subs, output_path)
 
             if not self._cancelled:
                 self._update_progress(1.0, "全部完成")
@@ -509,4 +502,5 @@ class PipelineTab(QWidget):
         finally:
             sys.stdout = old_stdout
             self._orchestrator = None
+            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()
