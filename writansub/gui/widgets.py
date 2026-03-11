@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
     QHBoxLayout, QDoubleSpinBox, QGridLayout, QFrame,
-    QScrollArea, QSizePolicy,
+    QScrollArea, QSizePolicy, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 
@@ -115,13 +115,49 @@ class ScrollableFrame(QScrollArea):
         self.setWidget(self.inner)
 
 
+class NoScrollComboBox(QComboBox):
+    """ComboBox that ignores wheel events unless focused."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event):
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class NoScrollSpinBox(QDoubleSpinBox):
+    """SpinBox that ignores wheel events unless focused."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event):
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
 class ParamSpinBox(QDoubleSpinBox):
-    """参数 SpinBox，值变化时自动保存配置"""
+    """参数 SpinBox，值变化时自动保存配置。
+    滚轮仅在获得焦点时生效，防止滚动页面时误触。"""
 
     def __init__(self, key: str, parent=None):
         super().__init__(parent)
         self._key = key
+        self.setFocusPolicy(Qt.StrongFocus)
         self.valueChanged.connect(self._on_change)
+
+    def wheelEvent(self, event):
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
     def _on_change(self, value: float):
         try:

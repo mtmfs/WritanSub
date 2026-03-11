@@ -7,10 +7,10 @@ from typing import Dict, List, Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
-    QListWidget, QPushButton, QLabel, QComboBox, QCheckBox,
-    QFileDialog, QFrame, QAbstractItemView,
+    QListWidget, QPushButton, QLabel, QCheckBox,
+    QFileDialog, QFrame, QAbstractItemView, QSplitter,
 )
-from PySide6.QtCore import Signal, QObject
+from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.core.types import MEDIA_FILETYPES, LANGUAGES, Sub, WordInfo
 from writansub.core.srt_io import write_srt, populate_romaji, merge_bilingual
@@ -23,6 +23,7 @@ from writansub.config import load_gui_state, save_gui_state, load_translate_conf
 from writansub.registry import ResourceRegistry
 from writansub.gui.widgets import (
     TextRedirector, ScrollableFrame, LogWidget, ProgressWidget, build_params_grid,
+    NoScrollComboBox,
 )
 
 
@@ -58,10 +59,19 @@ class PipelineTab(QWidget):
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        splitter = QSplitter(Qt.Vertical)
+        main_layout.addWidget(splitter, 1)
+
+        # ── 上半部分：设置 + 操作 + 进度 ──
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
 
         # 可滚动区域
         scrollable = ScrollableFrame()
-        main_layout.addWidget(scrollable, 1)
+        top_layout.addWidget(scrollable, 1)
 
         inner_layout = QVBoxLayout(scrollable.inner)
         inner_layout.setContentsMargins(12, 12, 12, 12)
@@ -97,6 +107,9 @@ class PipelineTab(QWidget):
         ret_layout.addWidget(self._chk_whisper)
         self._chk_force_align = QCheckBox("打轴 SRT")
         ret_layout.addWidget(self._chk_force_align)
+        self._chk_review = QCheckBox("校对标记文件")
+        self._chk_review.setToolTip("输出低置信词/低置信对齐的 SRT+ASS 标记文件")
+        ret_layout.addWidget(self._chk_review)
         ret_layout.addStretch()
 
         # 基本设置
@@ -105,18 +118,18 @@ class PipelineTab(QWidget):
         basic_layout = QHBoxLayout(card_basic)
 
         basic_layout.addWidget(QLabel("语言"))
-        self._lang_combo = QComboBox()
+        self._lang_combo = NoScrollComboBox()
         self._lang_combo.addItems(LANGUAGES)
         self._lang_combo.setCurrentText("ja")
         basic_layout.addWidget(self._lang_combo)
 
         basic_layout.addWidget(QLabel("Whisper 设备"))
-        self._whisper_device_combo = QComboBox()
+        self._whisper_device_combo = NoScrollComboBox()
         self._whisper_device_combo.addItems(["cuda", "cpu"])
         basic_layout.addWidget(self._whisper_device_combo)
 
         basic_layout.addWidget(QLabel("打轴设备"))
-        self._align_device_combo = QComboBox()
+        self._align_device_combo = NoScrollComboBox()
         self._align_device_combo.addItems(["cuda", "cpu"])
         basic_layout.addWidget(self._align_device_combo)
 
@@ -130,6 +143,35 @@ class PipelineTab(QWidget):
         basic_layout.addWidget(self._chk_cond_prev)
         basic_layout.addStretch()
 
+        # TIGER 音频分离
+        card_tiger = QGroupBox("TIGER 音频分离（可选）")
+        inner_layout.addWidget(card_tiger)
+        tiger_layout = QHBoxLayout(card_tiger)
+
+        self._chk_tiger_denoise = QCheckBox("降噪")
+        self._chk_tiger_denoise.setToolTip(
+            "DnR 分离出纯对话轨（去除音效和音乐）"
+        )
+        tiger_layout.addWidget(self._chk_tiger_denoise)
+
+        self._chk_tiger_separate = QCheckBox("对话分轨")
+        self._chk_tiger_separate.setToolTip(
+            "分离说话人 + VAD 重叠段检测\n"
+            "（自动启用降噪作为前置步骤）"
+        )
+        self._chk_tiger_separate.stateChanged.connect(self._on_tiger_separate_changed)
+        tiger_layout.addWidget(self._chk_tiger_separate)
+
+        tiger_layout.addWidget(QLabel("设备"))
+        self._tiger_device_combo = NoScrollComboBox()
+        self._tiger_device_combo.addItems(["cuda", "cpu"])
+        tiger_layout.addWidget(self._tiger_device_combo)
+
+        self._chk_tiger_save = QCheckBox("保留分离音频")
+        self._chk_tiger_save.setToolTip("保存 TIGER 分离的中间 WAV 文件")
+        tiger_layout.addWidget(self._chk_tiger_save)
+        tiger_layout.addStretch()
+
         # 后处理参数
         card_pp = QGroupBox("后处理参数")
         inner_layout.addWidget(card_pp)
@@ -137,9 +179,16 @@ class PipelineTab(QWidget):
 
         inner_layout.addStretch()
 
-        # 操作按钮
+        splitter.addWidget(top_widget)
+
+        # ── 下半部分：操作 + 进度 + 日志 ──
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+
         action_bar = QWidget()
-        main_layout.addWidget(action_bar)
+        bottom_layout.addWidget(action_bar)
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
         self._chk_translate = QCheckBox("AI 翻译")
@@ -153,20 +202,17 @@ class PipelineTab(QWidget):
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
 
-        # 进度条
         self._progress = ProgressWidget()
-        main_layout.addWidget(self._progress)
+        bottom_layout.addWidget(self._progress)
 
-        # 分隔线
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        main_layout.addWidget(sep)
-
-        # 日志区
         self._log = LogWidget()
-        self._log.setMinimumHeight(120)
-        main_layout.addWidget(self._log, 1)
+        bottom_layout.addWidget(self._log, 1)
+
+        splitter.addWidget(bottom_widget)
+
+        # 默认比例：上 3 下 1
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
 
     def _connect_state_signals(self):
         self._lang_combo.currentTextChanged.connect(self._auto_save)
@@ -175,7 +221,12 @@ class PipelineTab(QWidget):
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
         self._chk_whisper.stateChanged.connect(self._auto_save)
         self._chk_force_align.stateChanged.connect(self._auto_save)
+        self._chk_review.stateChanged.connect(self._auto_save)
         self._chk_translate.stateChanged.connect(self._auto_save)
+        self._chk_tiger_denoise.stateChanged.connect(self._auto_save)
+        self._chk_tiger_separate.stateChanged.connect(self._auto_save)
+        self._tiger_device_combo.currentTextChanged.connect(self._auto_save)
+        self._chk_tiger_save.stateChanged.connect(self._auto_save)
 
     def _auto_save(self):
         state = load_gui_state()
@@ -190,7 +241,12 @@ class PipelineTab(QWidget):
             "pipeline.cond_prev": self._chk_cond_prev.isChecked(),
             "pipeline.retain_whisper": self._chk_whisper.isChecked(),
             "pipeline.retain_align": self._chk_force_align.isChecked(),
+            "pipeline.retain_review": self._chk_review.isChecked(),
             "pipeline.enable_translate": self._chk_translate.isChecked(),
+            "pipeline.tiger_denoise": self._chk_tiger_denoise.isChecked(),
+            "pipeline.tiger_separate": self._chk_tiger_separate.isChecked(),
+            "pipeline.tiger_device": self._tiger_device_combo.currentText(),
+            "pipeline.tiger_save": self._chk_tiger_save.isChecked(),
             "pipeline.media_files": list(self._media_files),
         }
 
@@ -207,8 +263,18 @@ class PipelineTab(QWidget):
             self._chk_whisper.setChecked(state["pipeline.retain_whisper"])
         if "pipeline.retain_align" in state:
             self._chk_force_align.setChecked(state["pipeline.retain_align"])
+        if "pipeline.retain_review" in state:
+            self._chk_review.setChecked(state["pipeline.retain_review"])
         if "pipeline.enable_translate" in state:
             self._chk_translate.setChecked(state["pipeline.enable_translate"])
+        if "pipeline.tiger_denoise" in state:
+            self._chk_tiger_denoise.setChecked(state["pipeline.tiger_denoise"])
+        if "pipeline.tiger_separate" in state:
+            self._chk_tiger_separate.setChecked(state["pipeline.tiger_separate"])
+        if "pipeline.tiger_device" in state:
+            self._tiger_device_combo.setCurrentText(state["pipeline.tiger_device"])
+        if "pipeline.tiger_save" in state:
+            self._chk_tiger_save.setChecked(state["pipeline.tiger_save"])
         if "pipeline.media_files" in state:
             for p in state["pipeline.media_files"]:
                 if p not in self._media_files and os.path.isfile(p):
@@ -220,6 +286,10 @@ class PipelineTab(QWidget):
         if path and path not in self._media_files:
             self._media_files.append(path)
             self._file_list.addItem(os.path.basename(path))
+
+    def _on_tiger_separate_changed(self, state):
+        if state:
+            self._chk_tiger_denoise.setChecked(True)
 
     def _add_files(self):
         filter_str = "媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a);;所有文件 (*.*)"
@@ -270,16 +340,29 @@ class PipelineTab(QWidget):
         retention = {
             "whisper": self._chk_whisper.isChecked(),
             "force_align": self._chk_force_align.isChecked(),
+            "review": self._chk_review.isChecked(),
         }
         pp = {k: v.value() for k, v in self._pp_vars.items()}
         cond_prev = self._chk_cond_prev.isChecked()
         enable_translate = self._chk_translate.isChecked()
         translate_cfg = load_translate_config() if enable_translate else None
 
+        tiger_denoise = self._chk_tiger_denoise.isChecked()
+        tiger_separate = self._chk_tiger_separate.isChecked()
+        if tiger_separate:
+            tiger_mode = "separate"
+        elif tiger_denoise:
+            tiger_mode = "denoise"
+        else:
+            tiger_mode = None
+        tiger_save = self._chk_tiger_save.isChecked()
+        tiger_device = self._tiger_device_combo.currentText()
+
         thread = threading.Thread(
             target=self._run_pipeline,
             args=(list(self._media_files), lang, whisper_device,
-                  align_device, retention, pp, cond_prev, translate_cfg),
+                  align_device, retention, pp, cond_prev, translate_cfg,
+                  tiger_mode, tiger_save, tiger_device),
             daemon=True,
         )
         reg = ResourceRegistry.instance()
@@ -298,6 +381,9 @@ class PipelineTab(QWidget):
         retention: Dict[str, bool], pp: Dict[str, float],
         cond_prev: bool = True,
         translate_cfg: Optional[Dict[str, str]] = None,
+        tiger_mode: Optional[str] = None,
+        tiger_save: bool = False,
+        tiger_device: str = "cuda",
     ):
         import torch
 
@@ -308,16 +394,63 @@ class PipelineTab(QWidget):
         wc_threshold = pp.pop("word_conf_threshold", 0.50)
         ac_threshold = pp.pop("align_conf_threshold", 0.50)
 
-        num_phases = 3 if translate_cfg else 2
+        base_phases = 2  # Whisper + Align
+        if translate_cfg:
+            base_phases += 1
+        if tiger_mode:
+            base_phases += 1
+        num_phases = base_phases
+        phase_offset = 1 if tiger_mode else 0
+
         reg = ResourceRegistry.instance()
 
         try:
             total = len(media_files)
             sub_results: Dict[str, List[Sub]] = {}
             word_results: Dict[str, List[List[WordInfo]]] = {}
+            tiger_results: Dict[str, dict] = {}  # media -> tiger output
 
-            # ── 阶段 1: Whisper 语音识别 ──
-            self._log_msg(f"── 阶段 1/{num_phases}: Whisper 语音识别 ──")
+            # ── 阶段 0 (可选): TIGER 音频分离 ──
+            if tiger_mode and not self._cancelled:
+                self._log_msg(f"── 阶段 1/{num_phases}: TIGER 音频分离 ──")
+                from writansub.core.tiger import run_dnr_batch, run_speech_batch
+
+                # DnR 降噪（所有文件共享一次模型加载）
+                def _dnr_progress(pct, msg):
+                    self._update_progress(
+                        pct * 0.5 / num_phases, f"[DnR] {msg}")
+
+                try:
+                    tiger_results = run_dnr_batch(
+                        media_files,
+                        device=tiger_device,
+                        save_intermediate=tiger_save,
+                        log_callback=self._log_msg,
+                        progress_callback=_dnr_progress,
+                    )
+                except Exception as e:
+                    self._log_msg(f"DnR 处理出错: {e}")
+
+                # 说话人分轨 + VAD（仅 separate 模式）
+                if tiger_mode == "separate" and tiger_results and not self._cancelled:
+                    def _spk_progress(pct, msg):
+                        self._update_progress(
+                            (0.5 + pct * 0.5) / num_phases, f"[Speech] {msg}")
+
+                    try:
+                        run_speech_batch(
+                            tiger_results,
+                            device=tiger_device,
+                            save_intermediate=tiger_save,
+                            log_callback=self._log_msg,
+                            progress_callback=_spk_progress,
+                        )
+                    except Exception as e:
+                        self._log_msg(f"Speech 处理出错: {e}")
+
+            # ── 阶段 1 (或 2): Whisper 语音识别 ──
+            whisper_phase = 1 + phase_offset
+            self._log_msg(f"── 阶段 {whisper_phase}/{num_phases}: Whisper 语音识别 ──")
 
             w_device = whisper_device
             if w_device == "cuda":
@@ -344,24 +477,63 @@ class PipelineTab(QWidget):
                 self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                 def _w_progress(pct, msg, _idx=idx):
-                    overall = ((_idx - 1) + pct) / (total * num_phases)
+                    phase_start = phase_offset * total
+                    overall = (phase_start + (_idx - 1) + pct) / (total * num_phases)
                     self._update_progress(overall, f"[Whisper {_idx}/{total}] {msg}")
 
                 try:
-                    subs, word_data = transcribe(
-                        media,
-                        lang=lang,
-                        device=w_device,
-                        log_callback=self._log_msg,
-                        progress_callback=_w_progress,
-                        condition_on_previous_text=cond_prev,
-                        model=whisper_model,
-                    )
+                    tiger_data = tiger_results.get(media)
+
+                    # 有降噪结果时，用降噪后的对话轨做 Whisper 输入
+                    whisper_input = media
+                    _tmp_dialog = None
+                    if tiger_data and "dialog_wav" in tiger_data:
+                        import tempfile
+                        from writansub.core.tiger import save_wav
+                        _tmp_dialog = tempfile.NamedTemporaryFile(
+                            suffix=".wav", delete=False)
+                        _tmp_dialog.close()
+                        save_wav(tiger_data["dialog_wav"], _tmp_dialog.name,
+                                 tiger_data["dialog_sr"])
+                        whisper_input = _tmp_dialog.name
+                        self._log_msg("使用降噪后音频")
+
+                    overlap_regions = tiger_data.get("overlap_regions") if tiger_data else None
+                    separated_tracks = None
+                    if tiger_data and "spk1_wav" in tiger_data:
+                        separated_tracks = (tiger_data["spk1_wav"], tiger_data["spk2_wav"])
+
+                    try:
+                        if overlap_regions and separated_tracks:
+                            # TIGER 分轨模式：完整 Whisper + 重叠段替换
+                            subs, word_data = self._whisper_with_overlap(
+                                whisper_input, overlap_regions, separated_tracks,
+                                tiger_data.get("spk_sr", 16000),
+                                lang, w_device, cond_prev, whisper_model,
+                                _w_progress,
+                            )
+                        else:
+                            subs, word_data = transcribe(
+                                whisper_input,
+                                lang=lang,
+                                device=w_device,
+                                log_callback=self._log_msg,
+                                progress_callback=_w_progress,
+                                condition_on_previous_text=cond_prev,
+                                model=whisper_model,
+                            )
+                    finally:
+                        if _tmp_dialog:
+                            try:
+                                os.unlink(_tmp_dialog.name)
+                            except OSError:
+                                pass
+
                     sub_results[media] = subs
                     word_results[media] = word_data
 
-                    # review 文件
-                    if wc_threshold > 0.0:
+                    # review 文件（可选）
+                    if retention.get("review") and wc_threshold > 0.0:
                         srt_content, ass_content, low_count, total_words = generate_review(
                             subs, word_data, wc_threshold,
                         )
@@ -381,10 +553,11 @@ class PipelineTab(QWidget):
 
             reg.release_model(wh)
 
-            # ── 阶段 2: MMS_FA 强制打轴 ──
+            # ── MMS_FA 强制打轴 ──
+            align_phase = 2 + phase_offset
             aligned_results: Dict[str, List[Sub]] = {}
             if sub_results and not self._cancelled:
-                self._log_msg(f"── 阶段 2/{num_phases}: MMS_FA 强制打轴 ──")
+                self._log_msg(f"── 阶段 {align_phase}/{num_phases}: MMS_FA 强制打轴 ──")
 
                 a_device = align_device
                 if a_device == "cuda" and not torch.cuda.is_available():
@@ -410,7 +583,8 @@ class PipelineTab(QWidget):
                     self._log_msg(f"[{idx}/{total}] {os.path.basename(media)}")
 
                     def _a_progress(pct, msg, _idx=idx):
-                        overall = (total + (_idx - 1) + pct) / (total * num_phases)
+                        phase_start = (1 + phase_offset) * total
+                        overall = (phase_start + (_idx - 1) + pct) / (total * num_phases)
                         self._update_progress(overall, f"[打轴 {_idx}/{total}] {msg}")
 
                     try:
@@ -427,8 +601,8 @@ class PipelineTab(QWidget):
                         final = post_process(aligned, **pp)
                         aligned_results[media] = final
 
-                        # review 低置信对齐标记
-                        if ac_threshold > 0:
+                        # review 低置信对齐标记（可选）
+                        if retention.get("review") and ac_threshold > 0:
                             low_align = {
                                 s.index for s in final
                                 if s.score < ac_threshold
@@ -454,9 +628,10 @@ class PipelineTab(QWidget):
             # Phase 1+2 结束，flush 所有模型释放 GPU
             reg.flush_models()
 
-            # ── 阶段 3: AI 翻译（可选）──
+            # ── AI 翻译（可选）──
+            translate_phase = num_phases  # 翻译始终是最后一个阶段
             if translate_cfg and aligned_results and not self._cancelled:
-                self._log_msg(f"── 阶段 3/{num_phases}: AI 翻译 ──")
+                self._log_msg(f"── 阶段 {translate_phase}/{num_phases}: AI 翻译 ──")
                 for idx, media in enumerate(media_files, 1):
                     if self._cancelled:
                         self._log_msg("已取消")
@@ -468,7 +643,8 @@ class PipelineTab(QWidget):
                     self._log_msg(f"[{idx}/{total}] 翻译 {os.path.basename(media)}")
 
                     def _t_progress(pct, msg, _idx=idx):
-                        overall = (total * 2 + (_idx - 1) + pct) / (total * num_phases)
+                        phase_start = (translate_phase - 1) * total
+                        overall = (phase_start + (_idx - 1) + pct) / (total * num_phases)
                         self._update_progress(overall, f"[翻译 {_idx}/{total}] {msg}")
 
                     try:
@@ -504,3 +680,81 @@ class PipelineTab(QWidget):
             self._orchestrator = None
             ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()
+
+    def _whisper_with_overlap(
+        self, media, overlap_regions, separated_tracks, spk_sr,
+        lang, device, cond_prev, whisper_model, progress_callback,
+    ):
+        """完整 Whisper + 重叠段局部替换，返回 (subs, word_data)"""
+        import tempfile
+        from writansub.core.tiger import save_wav
+
+        self._log_msg("完整音频 Whisper 识别...")
+        full_subs, full_word_data = transcribe(
+            media, lang=lang, device=device,
+            log_callback=self._log_msg,
+            progress_callback=progress_callback,
+            condition_on_previous_text=cond_prev,
+            model=whisper_model,
+        )
+
+        if not overlap_regions:
+            return full_subs, full_word_data
+
+        self._log_msg(f"处理 {len(overlap_regions)} 个重叠段...")
+        spk1_wav, spk2_wav = separated_tracks
+
+        overlap_subs = []
+        for region in overlap_regions:
+            if self._cancelled:
+                return full_subs, full_word_data
+
+            start_sample = int(region.start * spk_sr)
+            end_sample = int(region.end * spk_sr)
+
+            for spk_wav in [spk1_wav, spk2_wav]:
+                chunk = spk_wav[:, start_sample:end_sample]
+                if chunk.shape[1] < 1600:
+                    continue
+
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    tmp_path = f.name
+                try:
+                    save_wav(chunk, tmp_path, spk_sr)
+                    local_subs, _ = transcribe(
+                        tmp_path, lang=lang, device=device,
+                        condition_on_previous_text=False,
+                        model=whisper_model,
+                    )
+                    for s in local_subs:
+                        s.start += region.start
+                        s.end += region.start
+                    overlap_subs.extend(local_subs)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+
+        # 标记重叠段的完整结果为 commented
+        for sub in full_subs:
+            mid = (sub.start + sub.end) / 2
+            for region in overlap_regions:
+                if region.start <= mid <= region.end:
+                    sub.commented = True
+                    break
+
+        active = [s for s in full_subs if not s.commented]
+        active.extend(overlap_subs)
+        active.sort(key=lambda s: s.start)
+        for i, s in enumerate(active, 1):
+            s.index = i
+
+        commented_count = sum(1 for s in full_subs if s.commented)
+        self._log_msg(
+            f"合并完成: {len(active)} 条有效, {commented_count} 条被替换"
+        )
+
+        # word_data 对应 active subs（局部结果没有词级数据）
+        word_data = [[] for _ in active]
+        return active, word_data

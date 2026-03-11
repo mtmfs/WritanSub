@@ -9,13 +9,14 @@ from PySide6.QtCore import Qt
 from writansub.config import load_gui_state, save_gui_state
 
 from writansub.gui.pipeline_tab import PipelineTab
+from writansub.gui.tiger_tab import TigerTab
 from writansub.gui.whisper_tab import WhisperTab
 from writansub.gui.alignment_tab import AlignmentTab
 from writansub.gui.translate_tab import TranslateTab
 
 
 class MainWindow(QMainWindow):
-    """主窗口：四个选项卡"""
+    """主窗口：五个选项卡"""
 
     def __init__(self, initial_media: str = ""):
         super().__init__()
@@ -28,6 +29,9 @@ class MainWindow(QMainWindow):
 
         self.pipeline_tab = PipelineTab()
         tabs.addTab(self.pipeline_tab, "一键流水线")
+
+        self.tiger_tab = TigerTab()
+        tabs.addTab(self.tiger_tab, "预处理")
 
         self.whisper_tab = WhisperTab()
         tabs.addTab(self.whisper_tab, "语音识别")
@@ -48,6 +52,7 @@ class MainWindow(QMainWindow):
 
         state = load_gui_state()
         state.update(self.pipeline_tab.save_state())
+        state.update(self.tiger_tab.save_state())
         state.update(self.whisper_tab.save_state())
         state.update(self.alignment_tab.save_state())
         state.update(self.translate_tab.save_state())

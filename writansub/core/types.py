@@ -42,6 +42,7 @@ class Sub:
     romaji: str = ""    # 罗马音（用于 alignment）
     score: float = 0.0  # 对齐置信度
     translated: str = ""  # 翻译文本
+    commented: bool = False  # 被重叠替换后标记为"注释"
 
 
 def fmt_srt_time(seconds: float) -> str:

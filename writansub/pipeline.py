@@ -1,4 +1,4 @@
-"""流水线编排：定义步骤基类、三个具体步骤、调度器"""
+"""流水线编排：定义步骤基类、具体步骤、调度器"""
 
 import abc
 import os
@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 from writansub.core.types import Sub
 from writansub.core.srt_io import parse_srt, write_srt
 from writansub.core.review import mark_low_align_in_review
-from writansub.core.whisper import transcribe_to_srt
+from writansub.core.whisper import transcribe, transcribe_to_srt
 from writansub.core.alignment import load_audio, run_alignment, post_process
 from writansub.core.translate import translate_srt
 
@@ -45,8 +45,63 @@ class PipelineStep(abc.ABC):
         return []
 
 
+class TigerStep(PipelineStep):
+    """TIGER 音频分离步骤（前处理，可选）
+
+    mode:
+        "denoise"  — 仅 DnR 降噪，输出干净对话轨供后续 Whisper 使用
+        "separate" — 降噪 + 说话人分轨 + VAD 重叠检测
+    """
+    name = "tiger"
+    display_name = "TIGER 音频分离"
+
+    def __init__(self, mode: str = "denoise", device: str = "cpu",
+                 cache_dir: str = "cache", save_intermediate: bool = False):
+        self.mode = mode
+        self.device = device
+        self.cache_dir = cache_dir
+        self.save_intermediate = save_intermediate
+
+    def execute(self, inputs, log_callback, cancelled, progress_callback=None):
+        from writansub.core.tiger import run_tiger_separation
+
+        media_file = inputs["media_file"]
+
+        if cancelled():
+            return {}
+
+        result = run_tiger_separation(
+            media_file,
+            mode=self.mode,
+            device=self.device,
+            cache_dir=self.cache_dir,
+            save_intermediate=self.save_intermediate,
+            log_callback=log_callback,
+            progress_callback=progress_callback,
+        )
+
+        outputs = {"media_file": media_file}
+
+        # 降噪模式：传递对话轨供 Whisper 使用
+        outputs["dialog_wav"] = result["dialog_wav"]
+        outputs["dialog_sr"] = result["dialog_sr"]
+
+        # 分轨模式：额外传递分离轨和重叠信息
+        if self.mode == "separate":
+            outputs["separated_tracks"] = (result["spk1_wav"], result["spk2_wav"])
+            outputs["spk_sr"] = result["spk_sr"]
+            outputs["overlap_regions"] = result["overlap_regions"]
+            outputs["overlap_ratio"] = result["overlap_ratio"]
+
+        return outputs
+
+
 class WhisperStep(PipelineStep):
-    """Whisper 语音识别步骤"""
+    """Whisper 语音识别步骤
+
+    当 inputs 中包含 overlap_regions 和 separated_tracks 时（来自 TigerStep），
+    会对完整音频跑 Whisper 后，用分离轨的局部结果替换重叠段。
+    """
     name = "whisper"
     display_name = "Whisper 语音识别"
 
@@ -67,17 +122,151 @@ class WhisperStep(PipelineStep):
             except Exception:
                 log_callback("CUDA 不可用，Whisper 回退到 CPU")
                 device = "cpu"
+
         media_file = inputs["media_file"]
-        srt_path = transcribe_to_srt(
+        overlap_regions = inputs.get("overlap_regions")
+        separated_tracks = inputs.get("separated_tracks")
+
+        if overlap_regions and separated_tracks:
+            # TIGER 分轨模式：完整 Whisper + 局部替换
+            srt_path = self._run_with_overlap(
+                media_file, overlap_regions, separated_tracks,
+                inputs.get("spk_sr", 16000),
+                device, log_callback, cancelled, progress_callback,
+            )
+        else:
+            # 普通模式 / 仅降噪模式
+            srt_path = transcribe_to_srt(
+                media_file,
+                lang=self.lang,
+                device=device,
+                log_callback=log_callback,
+                progress_callback=progress_callback,
+                word_conf_threshold=self.word_conf_threshold,
+                condition_on_previous_text=self.condition_on_previous_text,
+            )
+
+        return {"srt": srt_path, "media_file": media_file}
+
+    def _run_with_overlap(
+        self, media_file, overlap_regions, separated_tracks, spk_sr,
+        device, log_callback, cancelled, progress_callback,
+    ) -> str:
+        """完整 Whisper + 重叠段局部替换"""
+        import tempfile
+        import torchaudio
+        from writansub.core.srt_io import write_srt
+        from writansub.core.review import generate_review, write_review_files
+        from writansub.core.tiger import save_wav
+
+        log_callback("完整音频 Whisper 识别...")
+
+        # 1. 完整音频跑 Whisper
+        full_subs, full_word_data = transcribe(
             media_file,
             lang=self.lang,
             device=device,
             log_callback=log_callback,
             progress_callback=progress_callback,
-            word_conf_threshold=self.word_conf_threshold,
             condition_on_previous_text=self.condition_on_previous_text,
         )
-        return {"srt": srt_path, "media_file": media_file}
+
+        if cancelled():
+            return ""
+
+        if not overlap_regions:
+            # 无重叠段，直接输出
+            return self._write_output(media_file, full_subs, full_word_data)
+
+        log_callback(f"处理 {len(overlap_regions)} 个重叠段...")
+        spk1_wav, spk2_wav = separated_tracks
+
+        # 2. 对每个重叠段，用分离轨跑 Whisper
+        overlap_subs_map = {}  # (start, end) -> List[Sub]
+        for region in overlap_regions:
+            if cancelled():
+                return ""
+
+            start_sample = int(region.start * spk_sr)
+            end_sample = int(region.end * spk_sr)
+
+            for spk_idx, spk_wav in enumerate([spk1_wav, spk2_wav], 1):
+                chunk = spk_wav[:, start_sample:end_sample]
+                if chunk.shape[1] < 1600:  # < 0.1s
+                    continue
+
+                # 保存到临时文件给 Whisper
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    tmp_path = f.name
+                try:
+                    save_wav(chunk, tmp_path, spk_sr)
+                    local_subs, _ = transcribe(
+                        tmp_path,
+                        lang=self.lang,
+                        device=device,
+                        condition_on_previous_text=False,
+                    )
+                    # 偏移时间戳到全局时间
+                    for s in local_subs:
+                        s.start += region.start
+                        s.end += region.start
+                    key = (region.start, region.end)
+                    overlap_subs_map.setdefault(key, []).extend(local_subs)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+
+        # 3. 合并：标记重叠段的完整 Whisper 结果为 commented，插入局部结果
+        merged = []
+        overlap_inserts = []  # 收集所有局部结果
+
+        for sub in full_subs:
+            is_overlap = False
+            for region in overlap_regions:
+                # 字幕中心点在重叠区间内就算重叠
+                mid = (sub.start + sub.end) / 2
+                if region.start <= mid <= region.end:
+                    sub.commented = True
+                    is_overlap = True
+                    break
+            merged.append(sub)
+
+        for key, local_subs in overlap_subs_map.items():
+            overlap_inserts.extend(local_subs)
+
+        # 插入局部结果并按时间排序（未注释的 + 局部结果）
+        active_subs = [s for s in merged if not s.commented]
+        active_subs.extend(overlap_inserts)
+        active_subs.sort(key=lambda s: s.start)
+        for i, s in enumerate(active_subs, 1):
+            s.index = i
+
+        log_callback(
+            f"合并完成: {len(active_subs)} 条有效字幕, "
+            f"{sum(1 for s in merged if s.commented)} 条被替换"
+        )
+
+        return self._write_output(media_file, active_subs, [[] for _ in active_subs])
+
+    def _write_output(self, media_file, subs, word_data) -> str:
+        """写 SRT 和 review 文件"""
+        from writansub.core.srt_io import write_srt
+        from writansub.core.review import generate_review, write_review_files
+
+        srt_path = os.path.splitext(media_file)[0] + ".srt"
+        write_srt(subs, srt_path)
+
+        if self.word_conf_threshold > 0.0:
+            srt_content, ass_content, low_count, total_words = generate_review(
+                subs, word_data, self.word_conf_threshold,
+            )
+            if low_count > 0:
+                base = os.path.splitext(media_file)[0]
+                write_review_files(base, srt_content, ass_content)
+
+        return srt_path
 
     def get_intermediate_files(self, inputs, outputs):
         return [outputs.get("srt", "")]

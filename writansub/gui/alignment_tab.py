@@ -6,16 +6,16 @@ from typing import Dict
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
-    QLineEdit, QPushButton, QLabel, QComboBox, QFileDialog, QFrame,
+    QLineEdit, QPushButton, QLabel, QFileDialog, QSplitter,
 )
-from PySide6.QtCore import Signal, QObject
+from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.core.types import AUDIO_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.srt_io import parse_srt, write_srt
 from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
 from writansub.config import load_gui_state, save_gui_state
 from writansub.registry import ResourceRegistry
-from writansub.gui.widgets import TextRedirector, LogWidget, ProgressWidget, build_params_grid
+from writansub.gui.widgets import TextRedirector, LogWidget, ProgressWidget, build_params_grid, NoScrollComboBox
 
 
 class _AlignSignals(QObject):
@@ -42,9 +42,18 @@ class AlignmentTab(QWidget):
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        splitter = QSplitter(Qt.Vertical)
+        main_layout.addWidget(splitter, 1)
+
+        # ── 上半部分：设置 + 操作 + 进度 ──
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
 
         settings = QWidget()
-        main_layout.addWidget(settings)
+        top_layout.addWidget(settings, 1)
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(12, 12, 12, 12)
 
@@ -85,13 +94,13 @@ class AlignmentTab(QWidget):
         basic_row = QHBoxLayout()
         param_main.addLayout(basic_row)
         basic_row.addWidget(QLabel("语言"))
-        self._lang_combo = QComboBox()
+        self._lang_combo = NoScrollComboBox()
         self._lang_combo.addItems(LANGUAGES)
         self._lang_combo.setCurrentText("ja")
         basic_row.addWidget(self._lang_combo)
 
         basic_row.addWidget(QLabel("设备"))
-        self._device_combo = QComboBox()
+        self._device_combo = NoScrollComboBox()
         self._device_combo.addItems(["cuda", "cpu"])
         basic_row.addWidget(self._device_combo)
         basic_row.addStretch()
@@ -102,9 +111,16 @@ class AlignmentTab(QWidget):
 
         settings_layout.addStretch()
 
-        # 操作按钮
+        splitter.addWidget(top_widget)
+
+        # ── 下半部分：操作 + 进度 + 日志 ──
+        bottom_widget = QWidget()
+        bottom_layout = QVBoxLayout(bottom_widget)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+
         action_bar = QWidget()
-        main_layout.addWidget(action_bar)
+        bottom_layout.addWidget(action_bar)
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
         action_layout.addStretch()
@@ -112,20 +128,17 @@ class AlignmentTab(QWidget):
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
 
-        # 进度条
         self._progress = ProgressWidget()
-        main_layout.addWidget(self._progress)
+        bottom_layout.addWidget(self._progress)
 
-        # 分隔线
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        main_layout.addWidget(sep)
-
-        # 日志区
         self._log = LogWidget()
-        self._log.setMinimumHeight(120)
-        main_layout.addWidget(self._log, 1)
+        bottom_layout.addWidget(self._log, 1)
+
+        splitter.addWidget(bottom_widget)
+
+        # 默认比例：上 3 下 1
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
 
     def _connect_state_signals(self):
         self._audio_edit.editingFinished.connect(self._auto_save)
