@@ -1,9 +1,10 @@
 # WritanSub
 
-AI 字幕处理流水线：语音识别 → 强制打轴 → AI 翻译
+AI 字幕处理流水线：音频预处理 → 语音识别 → 强制打轴 → AI 翻译
 
 ## 功能
 
+- **TIGER 音频预处理** — DnR 降噪（去除音效和音乐）、说话人分轨 + VAD 重叠段检测
 - **Whisper 语音识别** — 基于 faster-whisper (large-v3)，支持日/中/英/韩等多语言
 - **MMS_FA 强制打轴** — 利用 Meta MMS 模型精确对齐字幕时间轴
 - **AI 翻译** — 调用 OpenAI 兼容 API 批量翻译字幕
@@ -58,14 +59,15 @@ pip install -e .
 python -m writansub
 ```
 
-GUI 提供四个页面：
+GUI 提供五个页面：
 
-| 页面       | 功能                              |
-| ---------- | --------------------------------- |
-| 一键流水线 | 批量 Whisper + 打轴，支持文件列表 |
-| 语音识别   | 单文件 Whisper 转录               |
-| 强制打轴   | 单文件 MMS_FA 对齐                |
-| AI 翻译    | 单文件字幕翻译                    |
+| 页面       | 功能                                        |
+| ---------- | ------------------------------------------- |
+| 一键流水线 | 批量 Whisper + 打轴 + 翻译，支持文件列表    |
+| 预处理     | TIGER 降噪 / 说话人分轨，批量处理           |
+| 语音识别   | 单文件 Whisper 转录                          |
+| 强制打轴   | 单文件 MMS_FA 对齐                           |
+| AI 翻译    | 单文件字幕翻译                               |
 
 ## 输出文件
 
@@ -83,12 +85,14 @@ GUI 提供四个页面：
 
 ## 模型下载
 
-首次运行需要下载以下模型（合计约 3 GB），下载后缓存到本地，后续不再重复下载：
+首次运行需要下载以下模型，下载后缓存到本地，后续不再重复下载：
 
 | 模型 | 用途 | 大小 |
 | --- | --- | --- |
 | Systran/faster-whisper-large-v3 | 语音识别 | ~1.5 GB |
 | MMS_FA (torchaudio 内置) | 强制打轴 | ~1.2 GB |
+| TIGER-DnR | 降噪（对话/音效/音乐分离） | — |
+| TIGER-Speech | 说话人分轨 | — |
 
 提供三种下载方式：
 
@@ -126,12 +130,14 @@ WritanSub/
 │   ├── core/              # 核心引擎（无 GUI 依赖）
 │   │   ├── types.py       # 数据类型、常量
 │   │   ├── srt_io.py      # SRT 读写
+│   │   ├── tiger.py       # TIGER 降噪 / 说话人分轨
 │   │   ├── whisper.py     # 语音识别
 │   │   ├── alignment.py   # 强制对齐 + 后处理
 │   │   └── translate.py   # AI 翻译
 │   ├── gui/               # PySide6 界面
 │   │   ├── widgets.py     # 通用控件
 │   │   ├── pipeline_tab.py
+│   │   ├── tiger_tab.py   # 预处理（降噪/分轨）
 │   │   ├── whisper_tab.py
 │   │   ├── alignment_tab.py
 │   │   ├── translate_tab.py
