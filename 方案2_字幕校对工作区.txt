@@ -1,0 +1,437 @@
+WritanSub 字幕校对工作区方案
+============================
+
+前置条件
+--------
+需先完成 GUI 迁移（方案1），本方案基于 PySide6。
+
+
+目标
+----
+新增"字幕校对"Tab，提供专业级字幕校对体验：
+- 双栏对比（原文/译文）
+- 音频按时间戳播放
+- 同步/异步高亮联动
+- 文本和时间轴编辑
+- 保存修改
+
+
+文件变更
+--------
+路径                          操作      说明
+────────────────────────────────────────────────────────
+core/audio_player.py          新增      音频播放器封装（纯逻辑，无GUI依赖）
+gui/review_tab.py             新增      校对工作区主界面
+gui/app.py                    修改      注册新 Tab
+────────────────────────────────────────────────────────
+pyproject.toml                修改      添加 sounddevice
+
+
+依赖变更 (pyproject.toml)
+-------------------------
+
+[project]
+dependencies = [
+    ...
+    "sounddevice",       # <-- 新增：音频播放
+]
+
+
+========================================================================
+第一部分：音频播放器 (core/audio_player.py)
+========================================================================
+
+"""音频播放器：基于 sounddevice，支持指定时间段播放"""
+
+import threading
+import numpy as np
+import sounddevice as sd
+from typing import Callable, Optional
+
+
+class AudioPlayer:
+    """音频播放器，支持按时间段播放、暂停、进度回调"""
+
+    def __init__(self):
+        self._data: Optional[np.ndarray] = None
+        self._sr: int = 44100
+        self._playing = False
+        self._paused = False
+        self._position = 0  # 当前播放位置（采样点）
+        self._end_sample = 0
+        self._stream: Optional[sd.OutputStream] = None
+        self._lock = threading.Lock()
+        self._on_position: Optional[Callable[[float], None]] = None
+        self._on_finish: Optional[Callable[[], None]] = None
+
+    def load(self, path: str) -> bool:
+        """加载音频文件到内存，返回是否成功"""
+        try:
+            import torchaudio
+            waveform, sr = torchaudio.load(path)
+            # 转单声道
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+            # 保持原始采样率（不重采样，保证音质）
+            self._data = waveform.squeeze().numpy()
+            self._sr = sr
+            return True
+        except Exception:
+            return False
+
+    def load_from_waveform(self, waveform: np.ndarray, sr: int = 44100):
+        """直接加载 numpy 数组"""
+        self._data = waveform
+        self._sr = sr
+
+    @property
+    def duration(self) -> float:
+        """音频总时长（秒）"""
+        if self._data is None:
+            return 0.0
+        return len(self._data) / self._sr
+
+    @property
+    def is_playing(self) -> bool:
+        return self._playing and not self._paused
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
+
+    def play_segment(self, start: float, end: float):
+        """播放指定时间段"""
+        if self._data is None:
+            return
+        self.stop()
+        start_sample = int(start * self._sr)
+        end_sample = int(end * self._sr)
+        start_sample = max(0, min(start_sample, len(self._data)))
+        end_sample = max(start_sample, min(end_sample, len(self._data)))
+
+        self._position = start_sample
+        self._end_sample = end_sample
+        self._playing = True
+        self._paused = False
+
+        def callback(outdata, frames, time_info, status):
+            with self._lock:
+                if self._paused or not self._playing:
+                    outdata.fill(0)
+                    return
+                remaining = self._end_sample - self._position
+                if remaining <= 0:
+                    outdata.fill(0)
+                    self._playing = False
+                    if self._on_finish:
+                        self._on_finish()
+                    raise sd.CallbackStop()
+                chunk = min(frames, remaining)
+                outdata[:chunk, 0] = self._data[self._position:self._position + chunk]
+                if chunk < frames:
+                    outdata[chunk:] = 0
+                self._position += chunk
+                # 注意: 此回调在非主线程，调用方需自行处理线程安全
+                if self._on_position:
+                    self._on_position(self._position / self._sr)
+
+        self._stream = sd.OutputStream(
+            samplerate=self._sr,
+            channels=1,
+            callback=callback,
+            dtype='float32',
+        )
+        self._stream.start()
+
+    def pause(self):
+        """暂停"""
+        self._paused = True
+
+    def resume(self):
+        """继续"""
+        self._paused = False
+
+    def stop(self):
+        """停止"""
+        self._playing = False
+        self._paused = False
+        if self._stream:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
+
+    def get_position(self) -> float:
+        """当前播放位置（秒）"""
+        return self._position / self._sr
+
+    def set_on_position(self, callback: Callable[[float], None]):
+        """设置进度回调（注意：回调在非主线程执行）"""
+        self._on_position = callback
+
+    def set_on_finish(self, callback: Callable[[], None]):
+        """设置播放完成回调（注意：回调在非主线程执行）"""
+        self._on_finish = callback
+
+
+========================================================================
+第二部分：界面布局
+========================================================================
+
+┌─────────────────────────────────────────────────────────────────┐
+│ [打开原文SRT] [打开译文SRT] [打开音频]            [保存全部]     │
+├─────────────────────────────────────────────────────────────────┤
+│ [▶播放] [⏸暂停] [⏮上一句] [⏭下一句] [🔗同步高亮 ☑]            │
+│ ═══════════════════●════════════════════ 00:01:23 / 00:05:00   │
+├─────────────────────────────┬───────────────────────────────────┤
+│     原文 (Source)           │      译文 (Target)                │
+├─────────────────────────────┼───────────────────────────────────┤
+│ ► 1. [00:00:01-00:00:03]   │  1. [00:00:01-00:00:03]           │
+│      Hello                  │     你好                          │
+│   2. [00:00:04-00:00:06]   │  2. [00:00:04-00:00:06]           │
+│      How are you            │     你好吗                        │
+│  【3. [00:00:07-00:00:10]】│ 【3. [00:00:07-00:00:10]】        │  ← 低置信标记
+│      Nice weather today     │     今天天气真好                   │
+└─────────────────────────────┴───────────────────────────────────┘
+
+
+========================================================================
+第三部分：字幕数据模型 (SubtitleModel)
+========================================================================
+
+class SubtitleModel(QAbstractTableModel):
+    """字幕数据模型，支持编辑"""
+
+    HEADERS = ["#", "开始", "结束", "文本"]
+    LOW_CONF_THRESHOLD = 0.5
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._subs: List[Sub] = []
+        self._modified: set = set()  # 已修改的行索引
+
+    def load(self, subs: List[Sub]):
+        self.beginResetModel()
+        self._subs = subs
+        self._modified.clear()
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._subs)
+
+    def columnCount(self, parent=QModelIndex()):
+        return 4
+
+    def data(self, index: QModelIndex, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        sub = self._subs[index.row()]
+        col = index.column()
+
+        if role == Qt.DisplayRole or role == Qt.EditRole:
+            if col == 0:
+                return sub.index
+            elif col == 1:
+                return f"{sub.start:.2f}"
+            elif col == 2:
+                return f"{sub.end:.2f}"
+            elif col == 3:
+                return sub.text
+
+        if role == Qt.BackgroundRole:
+            # score=0 表示未对齐（不标记）；0<score<阈值 表示低置信（黄色标记）
+            if 0 < sub.score < self.LOW_CONF_THRESHOLD:
+                return QBrush(QColor(255, 255, 200))
+            # 已修改蓝色背景
+            if index.row() in self._modified:
+                return QBrush(QColor(200, 220, 255))
+
+        return None
+
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole):
+        if not index.isValid() or role != Qt.EditRole:
+            return False
+        row = index.row()
+        col = index.column()
+        sub = self._subs[row]
+
+        try:
+            if col == 1:
+                sub.start = float(value)
+            elif col == 2:
+                sub.end = float(value)
+            elif col == 3:
+                sub.text = str(value)
+            else:
+                return False
+        except ValueError:
+            return False
+
+        self._modified.add(row)
+        self.dataChanged.emit(index, index)
+        return True
+
+    def flags(self, index: QModelIndex):
+        flags = super().flags(index)
+        if index.column() in (1, 2, 3):  # 开始、结束、文本可编辑
+            flags |= Qt.ItemIsEditable
+        return flags
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if orientation == Qt.Horizontal and role == Qt.DisplayRole:
+            return self.HEADERS[section]
+        return None
+
+    def get_subs(self) -> List[Sub]:
+        return self._subs
+
+    def is_modified(self) -> bool:
+        return len(self._modified) > 0
+
+    def clear_modified(self):
+        self._modified.clear()
+        self.layoutChanged.emit()
+
+
+========================================================================
+第四部分：校对工作区 (gui/review_tab.py) 核心逻辑
+========================================================================
+
+class ReviewTab(QWidget):
+    """字幕校对工作区"""
+
+    # 播放完成信号（用于线程安全）
+    _finish_signal = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._source_path: str = ""
+        self._target_path: str = ""
+        self._audio_path: str = ""
+        self._player = AudioPlayer()
+        self._sync_highlight = True
+        self._current_index = -1
+
+        self._setup_ui()
+        self._setup_shortcuts()
+        self._setup_timer()
+        self._setup_player_callbacks()
+
+    def _setup_player_callbacks(self):
+        """设置播放器回调"""
+        self._finish_signal.connect(self._on_play_finished)
+        self._player.set_on_finish(lambda: self._finish_signal.emit())
+
+    def _on_play_finished(self):
+        """播放完成处理（主线程）"""
+        self._timer.stop()
+        self._btn_play.setText("▶ 播放")
+
+    def _toggle_play(self):
+        """播放/暂停切换"""
+        if not self._audio_path:
+            return
+
+        # 正在播放 -> 暂停
+        if self._player.is_playing:
+            self._player.pause()
+            self._btn_play.setText("▶ 继续")
+            self._timer.stop()
+            return
+
+        # 已暂停 -> 继续
+        if self._player.is_paused:
+            self._player.resume()
+            self._btn_play.setText("⏸ 暂停")
+            self._timer.start()
+            return
+
+        # 未播放 -> 开始播放当前句
+        if self._current_index < 0:
+            self._current_index = 0
+        subs = self._source_model.get_subs()
+        if not subs or self._current_index >= len(subs):
+            return
+        sub = subs[self._current_index]
+        self._player.play_segment(sub.start, sub.end)
+        self._timer.start()
+        self._btn_play.setText("⏸ 暂停")
+
+    def _on_source_select(self, current: QModelIndex, previous: QModelIndex):
+        """原文选中事件"""
+        row = current.row()
+        self._current_index = row
+
+        # 同步高亮（带边界检查）
+        if self._sync_highlight:
+            if row < self._target_model.rowCount():
+                target_index = self._target_model.index(row, 0)
+                self._target_view.setCurrentIndex(target_index)
+                self._target_view.scrollTo(target_index)
+
+        # 自动播放
+        if self._audio_path:
+            subs = self._source_model.get_subs()
+            if 0 <= row < len(subs):
+                sub = subs[row]
+                self._player.play_segment(sub.start, sub.end)
+                self._timer.start()
+                self._btn_play.setText("⏸ 暂停")
+
+
+========================================================================
+第五部分：快捷键
+========================================================================
+
+推荐方案（避免与编辑冲突）：
+
+    Ctrl+Space      播放/暂停当前句
+    Alt+↑           上一句
+    Alt+↓           下一句
+    Ctrl+S          保存全部
+    双击单元格      编辑内容
+
+代码：
+    QShortcut(QKeySequence("Ctrl+Space"), self, self._toggle_play)
+    QShortcut(QKeySequence("Alt+Up"), self, self._prev_sentence)
+    QShortcut(QKeySequence("Alt+Down"), self, self._next_sentence)
+    QShortcut(QKeySequence("Ctrl+S"), self, self._save_all)
+
+
+========================================================================
+第六部分：app.py 修改
+========================================================================
+
+在 gui/app.py 中注册新 Tab：
+
+# 文件头部添加导入
+from writansub.gui.review_tab import ReviewTab
+
+# 在 MainWindow.__init__ 中添加：
+self.review_tab = ReviewTab()
+tabs.addTab(self.review_tab, "字幕校对")
+
+
+========================================================================
+实现步骤
+========================================================================
+
+Step 1: 添加依赖
+    - pyproject.toml 添加 sounddevice
+    - 运行 uv sync
+
+Step 2: 音频播放器
+    - 新建 core/audio_player.py
+
+Step 3: 校对 Tab
+    - 新建 gui/review_tab.py
+    - 实现 SubtitleModel
+    - 实现 ReviewTab
+
+Step 4: 注册 Tab
+    - 修改 app.py，添加"字幕校对"Tab
+
+Step 5: 测试
+    - 加载 SRT 文件
+    - 加载音频文件
+    - 测试播放、暂停、切换
+    - 测试编辑和保存

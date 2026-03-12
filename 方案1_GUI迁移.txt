@@ -1,0 +1,281 @@
+WritanSub GUI 迁移方案：Tkinter → PySide6
+==========================================
+
+目标
+----
+将 GUI 层从 Tkinter 迁移到 PySide6，保持现有功能不变。
+
+
+文件变更
+--------
+路径                          操作      说明
+────────────────────────────────────────────────────────
+gui/__init__.py               重写
+gui/app.py                    重写      主窗口 QMainWindow + QTabWidget
+gui/widgets.py                重写      通用控件（日志、进度条等）
+gui/pipeline_tab.py           重写      一键流水线
+gui/whisper_tab.py            重写      语音识别
+gui/alignment_tab.py          重写      强制打轴
+gui/translate_tab.py          重写      AI翻译
+────────────────────────────────────────────────────────
+pyproject.toml                修改      添加 PySide6
+────────────────────────────────────────────────────────
+core/*                        不动      核心逻辑层完全不动
+config.py                     不动
+pipeline.py                   不动
+
+
+依赖变更 (pyproject.toml)
+-------------------------
+
+[project]
+dependencies = [
+    ...
+    "PySide6",           # <-- 新增：替代 tkinter
+]
+
+
+========================================================================
+第一部分：通用控件 (gui/widgets.py)
+========================================================================
+
+"""通用 PySide6 控件：日志区、进度条、参数面板"""
+
+from PySide6.QtWidgets import (
+    QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
+    QHBoxLayout, QDoubleSpinBox, QGridLayout, QGroupBox,
+)
+from PySide6.QtCore import Qt, Signal, QObject
+
+
+class LogSignal(QObject):
+    """线程安全的日志信号"""
+    message = Signal(str)
+
+
+class LogWidget(QTextEdit):
+    """日志显示区域"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self._signal = LogSignal()
+        self._signal.message.connect(self._append)
+
+    def log(self, msg: str):
+        """线程安全地追加日志"""
+        self._signal.message.emit(msg)
+
+    def _append(self, msg: str):
+        self.append(msg)
+        self.verticalScrollBar().setValue(
+            self.verticalScrollBar().maximum()
+        )
+
+    def clear_log(self):
+        self.clear()
+
+
+class ProgressSignal(QObject):
+    """线程安全的进度信号"""
+    progress = Signal(float, str)  # (0.0-1.0, 状态文本)
+
+
+class ProgressWidget(QWidget):
+    """进度条 + 状态标签"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._status = QLabel("就绪")
+        self._bar = QProgressBar()
+        self._bar.setRange(0, 100)
+        self._pct = QLabel("")
+
+        layout.addWidget(self._status)
+        layout.addWidget(self._bar, 1)
+        layout.addWidget(self._pct)
+
+        self._signal = ProgressSignal()
+        self._signal.progress.connect(self._update)
+
+    def update_progress(self, pct: float, msg: str):
+        """线程安全地更新进度"""
+        self._signal.progress.emit(pct, msg)
+
+    def _update(self, pct: float, msg: str):
+        self._bar.setValue(int(pct * 100))
+        self._status.setText(msg)
+        self._pct.setText(f"{int(pct * 100)}%" if pct > 0 else "")
+
+    def reset(self):
+        self._bar.setValue(0)
+        self._status.setText("就绪")
+        self._pct.setText("")
+
+
+def build_params_grid(parent: QGroupBox, keys: list, config: dict, defaults: dict, defs: dict):
+    """构建参数网格，返回 {key: QDoubleSpinBox} 字典"""
+    layout = QGridLayout(parent)
+    spinboxes = {}
+
+    for i, key in enumerate(keys):
+        defn = defs[key]
+        row = i // 2
+        col = (i % 2) * 2
+
+        label = QLabel(defn["label"])
+        layout.addWidget(label, row, col)
+
+        spin = QDoubleSpinBox()
+        spin.setRange(defn["from"], defn["to"])
+        spin.setSingleStep(defn["inc"])
+        spin.setDecimals(2)
+        spin.setValue(config.get(key, defaults[key]))
+        layout.addWidget(spin, row, col + 1)
+
+        if defn.get("tip"):
+            label.setToolTip(defn["tip"])
+
+        spinboxes[key] = spin
+
+    return spinboxes
+
+
+========================================================================
+第二部分：主窗口 (gui/app.py)
+========================================================================
+
+"""主窗口：QMainWindow + QTabWidget"""
+
+import sys
+from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PySide6.QtCore import Qt
+
+from writansub.gui.pipeline_tab import PipelineTab
+from writansub.gui.whisper_tab import WhisperTab
+from writansub.gui.alignment_tab import AlignmentTab
+from writansub.gui.translate_tab import TranslateTab
+
+
+class MainWindow(QMainWindow):
+    """主窗口"""
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("WritanSub - AI 字幕处理流水线")
+        self.setMinimumSize(800, 600)
+        self.resize(900, 700)
+
+        tabs = QTabWidget()
+        self.setCentralWidget(tabs)
+
+        self.pipeline_tab = PipelineTab()
+        tabs.addTab(self.pipeline_tab, "一键流水线")
+
+        self.whisper_tab = WhisperTab()
+        tabs.addTab(self.whisper_tab, "语音识别")
+
+        self.alignment_tab = AlignmentTab()
+        tabs.addTab(self.alignment_tab, "强制打轴")
+
+        self.translate_tab = TranslateTab()
+        tabs.addTab(self.translate_tab, "AI 翻译")
+
+
+def main():
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
+
+
+========================================================================
+第三部分：Tab 迁移模板
+========================================================================
+
+由于 pipeline_tab、whisper_tab、alignment_tab、translate_tab 结构类似，
+按此模板重写：
+
+class XxxTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # 文件选择区
+        file_group = QGroupBox("文件")
+        # ... QLineEdit + QPushButton
+
+        # 参数设置区
+        params_group = QGroupBox("参数")
+        # ... QComboBox, QSpinBox, QCheckBox
+
+        # 操作按钮
+        btn_layout = QHBoxLayout()
+        self._btn_start = QPushButton("开始")
+        self._btn_cancel = QPushButton("取消")
+
+        # 进度条
+        self._progress = ProgressWidget()
+
+        # 日志区
+        self._log = LogWidget()
+
+    def _start(self):
+        # 禁用按钮，启动 QThread 执行任务
+        pass
+
+    def _on_finished(self):
+        # 恢复按钮
+        pass
+
+
+========================================================================
+实现步骤
+========================================================================
+
+Step 1: 依赖准备
+    - pyproject.toml 添加 PySide6
+    - 运行 uv sync
+
+Step 2: 重写通用控件
+    - 重写 gui/widgets.py
+
+Step 3: 重写主窗口
+    - 重写 gui/app.py（暂不含 ReviewTab）
+
+Step 4: 逐个迁移 Tab
+    - pipeline_tab.py
+    - whisper_tab.py
+    - alignment_tab.py
+    - translate_tab.py
+
+Step 5: 测试验证
+    - 运行 python -m writansub
+    - 测试各 Tab 功能是否正常
+
+
+========================================================================
+注意事项
+========================================================================
+
+1. 线程安全
+   - 所有耗时操作（Whisper、对齐、翻译）在 QThread 中执行
+   - 通过 Signal 更新 UI
+
+2. core/ 层完全不动
+   - 回调接口保持：log_callback(str), progress_callback(float, str)
+   - GUI 层负责将回调转为 Signal
+
+3. 兼容性
+   - PySide6 要求 Python 3.8+，项目要求 3.12+，无问题
+   - Windows/macOS/Linux 均支持
