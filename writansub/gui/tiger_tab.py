@@ -2,7 +2,6 @@
 
 import os
 import threading
-from typing import List
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
@@ -27,7 +26,7 @@ class TigerTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._media_files: List[str] = []
+        self._media_files: list[str] = []
         self._signals = _TigerSignals()
         self._signals.finished.connect(self._on_finished)
         self._setup_ui()
@@ -180,7 +179,7 @@ class TigerTab(QWidget):
         self._auto_save()
 
     def _remove_files(self):
-        for item in self._file_list.selectedItems():
+        for item in reversed(self._file_list.selectedItems()):
             row = self._file_list.row(item)
             self._file_list.takeItem(row)
             self._media_files.pop(row)
@@ -224,58 +223,54 @@ class TigerTab(QWidget):
         self._thread_handle = reg.register_thread(thread)
         thread.start()
 
-    def _run_tiger(self, media_files: List[str], do_separate: bool,
+    def _run_tiger(self, media_files: list[str], do_separate: bool,
                    save_intermediate: bool, device: str):
         from writansub.core.tiger import run_dnr_batch, run_speech_batch
+
+        log = self._log.log
+        progress = self._progress.update_progress
 
         try:
             total_phases = 2 if do_separate else 1
 
             # DnR 降噪
-            self._log_msg(f"── 阶段 1/{total_phases}: DnR 降噪 ──")
+            log(f"── 阶段 1/{total_phases}: DnR 降噪 ──")
 
             def _dnr_progress(pct, msg):
-                self._update_progress(pct / total_phases, f"[DnR] {msg}")
+                progress(pct / total_phases, f"[DnR] {msg}")
 
             tiger_results = run_dnr_batch(
                 media_files,
                 device=device,
                 save_intermediate=save_intermediate,
-                log_callback=self._log_msg,
+                log_callback=log,
                 progress_callback=_dnr_progress,
             )
 
             # 说话人分轨
             if do_separate and tiger_results:
-                self._log_msg(f"── 阶段 2/{total_phases}: 说话人分轨 ──")
+                log(f"── 阶段 2/{total_phases}: 说话人分轨 ──")
 
                 def _spk_progress(pct, msg):
-                    self._update_progress(
-                        (1 + pct) / total_phases, f"[Speech] {msg}")
+                    progress((1 + pct) / total_phases, f"[Speech] {msg}")
 
                 run_speech_batch(
                     tiger_results,
                     device=device,
                     save_intermediate=save_intermediate,
-                    log_callback=self._log_msg,
+                    log_callback=log,
                     progress_callback=_spk_progress,
                 )
 
-            self._log_msg("全部处理完成")
-            self._update_progress(1.0, "完成")
+            log("全部处理完成")
+            progress(1.0, "完成")
 
         except Exception as e:
-            self._log_msg(f"处理出错: {e}")
+            log(f"处理出错: {e}")
         finally:
+            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()
 
     def _on_finished(self):
         self._start_btn.setEnabled(True)
 
-    # ── 线程安全的 UI 更新 ──
-
-    def _log_msg(self, msg: str):
-        self._log.log(msg)
-
-    def _update_progress(self, pct: float, msg: str):
-        self._progress.update_progress(pct, msg)

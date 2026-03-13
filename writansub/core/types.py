@@ -36,36 +36,36 @@ class WordInfo(NamedTuple):
 class Sub:
     """一条字幕"""
     index: int
-    start: float       # 秒
-    end: float          # 秒
-    text: str           # 原始文本
-    romaji: str = ""    # 罗马音（用于 alignment）
-    score: float = 0.0  # 对齐置信度
+    start: float          # 秒
+    end: float            # 秒
+    text: str             # 原始文本
+    romaji: str = ""      # 罗马音（用于 alignment）
+    score: float = 0.0    # 对齐置信度
     translated: str = ""  # 翻译文本
     commented: bool = False  # 被重叠替换后标记为"注释"
 
 
-def fmt_srt_time(seconds: float) -> str:
-    """秒 → SRT 时间格式 HH:MM:SS,mmm"""
+def _hms_parts(seconds: float) -> tuple[int, int, int, float]:
+    """将秒拆分为 (时, 分, 秒, 小数秒) 四元组。"""
     seconds = max(0.0, seconds)
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
-    ms = int(round((seconds % 1) * 1000))
-    if ms >= 1000:
-        ms = 999
+    frac = seconds % 1
+    return h, m, s, frac
+
+
+def fmt_srt_time(seconds: float) -> str:
+    """秒 → SRT 时间格式 HH:MM:SS,mmm"""
+    h, m, s, frac = _hms_parts(seconds)
+    ms = min(int(round(frac * 1000)), 999)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def fmt_ass_time(seconds: float) -> str:
     """秒 → ASS 时间格式 H:MM:SS.cc"""
-    seconds = max(0.0, seconds)
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    cs = int(round((seconds % 1) * 100))
-    if cs >= 100:
-        cs = 99
+    h, m, s, frac = _hms_parts(seconds)
+    cs = min(int(round(frac * 100)), 99)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 

@@ -6,10 +6,22 @@ from typing import Any, Callable, List, Optional, Tuple
 from writansub.core.types import Sub
 
 _ROMAJI_FILTER_RE = re.compile(r'[^a-z]')
+_PUNCT_CJK_RE = re.compile(
+    r'[「」『』【】（）()\[\]{}'
+    r'、。，．！？!?…♪～~♡♥☆★※＊・：；""\'\'《》〈〉'
+    r'─―—\-'
+    r'0-9０-９\s]'
+)
+_PUNCT_LATIN_RE = re.compile(
+    r'[「」『』【】（）()\[\]{}'
+    r'、。，．！？!?…♪～~♡♥☆★※＊・：；""\'\'《》〈〉'
+    r'─―—\-,.:;!?\'"'
+    r'0-9０-９\s]'
+)
 _katsu: Optional[Any] = None
 
 
-def _get_katsu():
+def _get_katsu() -> Any:
     global _katsu
     if _katsu is None:
         import cutlet
@@ -19,19 +31,11 @@ def _get_katsu():
 
 def japanese_to_romaji(text: str) -> str:
     """日语文本 → 小写罗马音，只保留 a-z。"""
-    cleaned = re.sub(
-        r'[「」『』【】（）()\[\]{}'
-        r'、。，．！？!?…♪～~♡♥☆★※＊・：；""\'\'《》〈〉'
-        r'─―—\-'
-        r'0-9０-９\s]',
-        '', text
-    )
+    cleaned = _PUNCT_CJK_RE.sub('', text)
     if not cleaned:
         return ""
-    katsu = _get_katsu()
-    romaji = katsu.romaji(cleaned)
-    romaji = _ROMAJI_FILTER_RE.sub('', romaji.lower())
-    return romaji
+    romaji = _get_katsu().romaji(cleaned)
+    return _ROMAJI_FILTER_RE.sub('', romaji.lower())
 
 
 def text_to_romaji(text: str, lang: str) -> str:
@@ -39,13 +43,7 @@ def text_to_romaji(text: str, lang: str) -> str:
     if lang == "ja":
         return japanese_to_romaji(text)
 
-    cleaned = re.sub(
-        r'[「」『』【】（）()\[\]{}'
-        r'、。，．！？!?…♪～~♡♥☆★※＊・：；""\'\'《》〈〉'
-        r'─―—\-,.:;!?\'"'
-        r'0-9０-９\s]',
-        '', text
-    )
+    cleaned = _PUNCT_LATIN_RE.sub('', text)
     if not cleaned:
         return ""
 
@@ -77,7 +75,6 @@ def load_audio(path: str):
     """加载音频，重采样到 16kHz，返回单声道 [1, T] Tensor。
     使用 ffmpeg 解码，支持 MP4/MKV/MP3 等任意格式。"""
     import shutil
-    import subprocess
     import numpy as np
     import torch
     from torchaudio.pipelines import MMS_FA as bundle
@@ -102,7 +99,7 @@ def load_audio(path: str):
     return waveform
 
 
-def init_model(device: str):
+def init_model(device: str) -> Tuple:
     """初始化 MMS_FA 模型、tokenizer、aligner。"""
     from torchaudio.pipelines import MMS_FA as bundle
     model = bundle.get_model().to(device)
@@ -129,13 +126,11 @@ def align_segment(
     if not romaji:
         return None
 
-    transcript = ["*", romaji, "*"]
-
     with torch.inference_mode():
         emission, _ = model(waveform_chunk.to(device))
 
     try:
-        token_spans = aligner(emission[0], tokenizer(transcript))
+        token_spans = aligner(emission[0], tokenizer(["*", romaji, "*"]))
     except RuntimeError:
         return None
 
@@ -144,15 +139,10 @@ def align_segment(
 
     text_spans = token_spans[1]
 
-    num_frames = emission.shape[1]
-    audio_samples = waveform_chunk.shape[1]
-    ratio = audio_samples / num_frames / bundle.sample_rate
-
+    ratio = waveform_chunk.shape[1] / emission.shape[1] / bundle.sample_rate
     start_sec = text_spans[0].start * ratio
     end_sec = text_spans[-1].end * ratio
-
-    scores = [s.score for s in text_spans]
-    avg_score = sum(scores) / len(scores) if scores else 0.0
+    avg_score = sum(s.score for s in text_spans) / len(text_spans)
 
     return (start_sec, end_sec, avg_score)
 
@@ -187,8 +177,8 @@ def run_alignment(
     results = []
     success = 0
     fail = 0
-
     total_subs = len(subs)
+
     for i, sub in enumerate(subs):
         if progress_callback:
             progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")
@@ -212,13 +202,11 @@ def run_alignment(
         result = align_segment(chunk, sub.romaji, model, tokenizer, aligner, device)
 
         if result is not None:
-            aligned_start = result[0] + win_start
-            aligned_end = result[1] + win_start
-            avg_score = result[2]
+            aligned_start, aligned_end, avg_score = result
             results.append(Sub(
                 index=sub.index,
-                start=aligned_start,
-                end=aligned_end,
+                start=aligned_start + win_start,
+                end=aligned_end + win_start,
                 text=sub.text,
                 romaji=sub.romaji,
                 score=avg_score,

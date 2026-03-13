@@ -1,5 +1,6 @@
 """SRT 读写：parse_srt、write_srt、populate_romaji、merge_bilingual"""
 
+import dataclasses
 from typing import List
 
 from writansub.core.types import Sub, fmt_srt_time
@@ -24,7 +25,7 @@ def parse_srt(path: str, lang: str = "ja") -> List[Sub]:
     return result
 
 
-def write_srt(subs: List[Sub], path: str):
+def write_srt(subs: List[Sub], path: str) -> None:
     """写入 SRT 文件"""
     with open(path, 'w', encoding='utf-8') as f:
         for sub in subs:
@@ -49,16 +50,6 @@ def merge_bilingual(subs: List[Sub]) -> List[Sub]:
     """
     result = []
     for sub in subs:
-        merged_text = sub.text
-        if sub.translated:
-            merged_text = f"{sub.text}\n{sub.translated}"
-        result.append(Sub(
-            index=sub.index,
-            start=sub.start,
-            end=sub.end,
-            text=merged_text,
-            romaji=sub.romaji,
-            score=sub.score,
-            translated=sub.translated,
-        ))
+        merged_text = f"{sub.text}\n{sub.translated}" if sub.translated else sub.text
+        result.append(dataclasses.replace(sub, text=merged_text))
     return result

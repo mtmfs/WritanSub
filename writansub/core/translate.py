@@ -4,7 +4,7 @@ import os
 import re
 from typing import Callable, Dict, List, Optional
 
-from writansub.core.types import Sub
+from writansub.core.types import Sub, fmt_srt_time
 
 
 def translate_subs(
@@ -61,7 +61,7 @@ def translate_subs(
         batch = subs[batch_start:batch_end]
 
         lines = [
-            f"{s.index}: {s.text.replace(chr(10), ' ').strip()}" for s in batch
+            f"{s.index}: {s.text.replace('\n', ' ').strip()}" for s in batch
         ]
         prompt = "\n".join(lines)
 
@@ -100,7 +100,6 @@ def translate_subs(
         except Exception as e:
             _log(f"  批次翻译出错: {e}")
 
-    # 写入 Sub.translated 字段
     for s in subs:
         if s.index in translated:
             s.translated = translated[s.index]
@@ -128,9 +127,6 @@ def translate_srt(
     Returns:
         翻译后的 SRT 文件路径
     """
-    from writansub.core.srt_io import parse_srt, write_srt
-    from writansub.core.types import fmt_srt_time
-
     import pysrt
 
     srt_subs = pysrt.open(srt_path, encoding="utf-8")

@@ -14,9 +14,9 @@ from writansub.core.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
 from writansub.core.whisper import transcribe
 from writansub.core.review import generate_review, write_review_files
 from writansub.core.srt_io import write_srt
-from writansub.config import PP_DEFAULTS, PARAM_DEFS, load_pp_config, save_pp_config, load_gui_state, save_gui_state
+from writansub.config import PARAM_DEFS, load_gui_state, save_gui_state
 from writansub.registry import ResourceRegistry
-from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, NoScrollSpinBox
+from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, ParamSpinBox
 
 
 class _WhisperSignals(QObject):
@@ -91,21 +91,16 @@ class WhisperTab(QWidget):
         self._device_combo.addItems(["cuda", "cpu"])
         param_layout.addWidget(self._device_combo)
 
-        lbl_wc = QLabel("置信阈值")
-        tip_text = PARAM_DEFS["word_conf_threshold"].get("tip", "")
-        if tip_text:
-            lbl_wc.setText("置信阈值 ⓘ")
-            lbl_wc.setToolTip(tip_text)
-            lbl_wc.setCursor(Qt.WhatsThisCursor)
+        wc_def = PARAM_DEFS["word_conf_threshold"]
+        lbl_wc = QLabel(wc_def["label"] + " ⓘ")
+        lbl_wc.setToolTip(wc_def.get("tip", ""))
+        lbl_wc.setCursor(Qt.WhatsThisCursor)
         param_layout.addWidget(lbl_wc)
 
-        cfg = load_pp_config()
-        self._wc_spin = NoScrollSpinBox()
-        self._wc_spin.setRange(0.0, 1.0)
-        self._wc_spin.setSingleStep(0.05)
+        self._wc_spin = ParamSpinBox("word_conf_threshold")
+        self._wc_spin.setRange(wc_def["from"], wc_def["to"])
+        self._wc_spin.setSingleStep(wc_def["inc"])
         self._wc_spin.setDecimals(2)
-        self._wc_spin.setValue(cfg.get("word_conf_threshold", PP_DEFAULTS["word_conf_threshold"]))
-        self._wc_spin.valueChanged.connect(self._on_wc_change)
         param_layout.addWidget(self._wc_spin)
 
         self._chk_cond_prev = QCheckBox("上文关联")
@@ -183,15 +178,14 @@ class WhisperTab(QWidget):
             self._chk_cond_prev.setChecked(state["whisper.cond_prev"])
 
     def _browse_media(self):
-        filter_str = "媒体文件 (*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a);;所有文件 (*.*)"
+        filter_str = ";;".join(f"{label} ({exts})" for label, exts in MEDIA_FILETYPES)
         path, _ = QFileDialog.getOpenFileName(self, "选择媒体文件", "", filter_str)
         if path:
             self._media_edit.setText(path)
 
     def _browse_output(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "保存 SRT", "", "SRT 字幕 (*.srt);;所有文件 (*.*)"
-        )
+        filter_str = ";;".join(f"{label} ({exts})" for label, exts in SRT_FILETYPES)
+        path, _ = QFileDialog.getSaveFileName(self, "保存 SRT", "", filter_str)
         if path:
             self._output_edit.setText(path)
 
@@ -199,14 +193,6 @@ class WhisperTab(QWidget):
         media = text.strip()
         if media and not self._output_edit.text().strip():
             self._output_edit.setText(os.path.splitext(media)[0] + ".srt")
-
-    def _on_wc_change(self, value: float):
-        try:
-            current = load_pp_config()
-            current["word_conf_threshold"] = round(value, 2)
-            save_pp_config(current)
-        except Exception:
-            pass
 
     def _log_msg(self, msg: str):
         self._log.log(msg)

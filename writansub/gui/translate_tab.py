@@ -2,7 +2,7 @@
 
 import os
 import threading
-from typing import Dict
+from dataclasses import replace
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
@@ -10,12 +10,22 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.core.types import SRT_FILETYPES, TRANSLATE_TARGETS
+from writansub.core.types import TRANSLATE_TARGETS
 from writansub.core.srt_io import parse_srt, write_srt
 from writansub.core.translate import translate_subs
 from writansub.config import load_translate_config, save_translate_config, load_gui_state, save_gui_state
 from writansub.registry import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox
+
+# 状态字段 → (widget 属性, setter/getter 类型)
+_STATE_FIELDS = {
+    "translate.srt": "_srt_edit",
+    "translate.output": "_out_edit",
+    "translate.target_lang": "_target_combo",
+    "translate.model": "_model_edit",
+    "translate.api_base": "_base_edit",
+    "translate.api_key": "_key_edit",
+}
 
 
 class _TranslateSignals(QObject):
@@ -42,7 +52,7 @@ class TranslateTab(QWidget):
         splitter = QSplitter(Qt.Vertical)
         main_layout.addWidget(splitter, 1)
 
-        # ── 上半部分：设置 + 操作 + 进度 ──
+        # ── 上半部分：设置 ──
         top_widget = QWidget()
         top_layout = QVBoxLayout(top_widget)
         top_layout.setContentsMargins(0, 0, 0, 0)
@@ -150,14 +160,18 @@ class TranslateTab(QWidget):
         state.update(self.save_state())
         save_gui_state(state)
 
-    def save_state(self) -> dict:
-        # Also sync translate config so pipeline can read it
-        save_translate_config({
+    def _get_translate_config(self) -> dict:
+        """当前翻译配置（用于保存和执行）"""
+        return {
             "target_lang": self._target_combo.currentText(),
             "api_base": self._base_edit.text(),
             "api_key": self._key_edit.text(),
             "model": self._model_edit.text(),
-        })
+        }
+
+    def save_state(self) -> dict:
+        # Also sync translate config so pipeline can read it
+        save_translate_config(self._get_translate_config())
         return {
             "translate.srt": self._srt_edit.text(),
             "translate.output": self._out_edit.text(),
@@ -168,18 +182,14 @@ class TranslateTab(QWidget):
         }
 
     def restore_state(self, state: dict):
-        if "translate.srt" in state:
-            self._srt_edit.setText(state["translate.srt"])
-        if "translate.output" in state:
-            self._out_edit.setText(state["translate.output"])
-        if "translate.target_lang" in state:
-            self._target_combo.setCurrentText(state["translate.target_lang"])
-        if "translate.model" in state:
-            self._model_edit.setText(state["translate.model"])
-        if "translate.api_base" in state:
-            self._base_edit.setText(state["translate.api_base"])
-        if "translate.api_key" in state:
-            self._key_edit.setText(state["translate.api_key"])
+        for key, attr in _STATE_FIELDS.items():
+            if key not in state:
+                continue
+            widget = getattr(self, attr)
+            if hasattr(widget, "setCurrentText"):
+                widget.setCurrentText(state[key])
+            else:
+                widget.setText(state[key])
 
     def _browse_srt(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -201,19 +211,13 @@ class TranslateTab(QWidget):
             base = os.path.splitext(srt)[0]
             self._out_edit.setText(f"{base}_translated.srt")
 
-    def _log_msg(self, msg: str):
-        self._log.log(msg)
-
-    def _update_progress(self, pct: float, msg: str):
-        self._progress.update_progress(pct, msg)
-
     def _on_finished(self):
         self._start_btn.setEnabled(True)
 
     def _start(self):
         srt = self._srt_edit.text().strip()
         if not srt or not os.path.isfile(srt):
-            self._log_msg("请选择有效的 SRT 文件")
+            self._log.log("请选择有效的 SRT 文件")
             return
 
         output = self._out_edit.text().strip()
@@ -221,12 +225,7 @@ class TranslateTab(QWidget):
             output = os.path.splitext(srt)[0] + "_translated.srt"
             self._out_edit.setText(output)
 
-        cfg = {
-            "target_lang": self._target_combo.currentText(),
-            "api_base": self._base_edit.text(),
-            "api_key": self._key_edit.text(),
-            "model": self._model_edit.text(),
-        }
+        cfg = self._get_translate_config()
         save_translate_config(cfg)
 
         self._start_btn.setEnabled(False)
@@ -242,7 +241,7 @@ class TranslateTab(QWidget):
         self._thread_handle = reg.register_thread(thread)
         thread.start()
 
-    def _run_translate(self, srt: str, output: str, cfg: Dict[str, str]):
+    def _run_translate(self, srt: str, output: str, cfg: dict):
         try:
             subs = parse_srt(srt)
             translate_subs(
@@ -251,27 +250,19 @@ class TranslateTab(QWidget):
                 api_base=cfg["api_base"],
                 api_key=cfg["api_key"],
                 model=cfg["model"],
-                log_callback=self._log_msg,
-                progress_callback=self._update_progress,
+                log_callback=self._log.log,
+                progress_callback=self._progress.update_progress,
             )
 
-            # 写翻译结果到用户指定路径
             # 用 translated 字段替换 text 用于输出
-            from writansub.core.types import Sub
-            output_subs = []
-            for s in subs:
-                output_subs.append(Sub(
-                    index=s.index,
-                    start=s.start,
-                    end=s.end,
-                    text=s.translated if s.translated else s.text,
-                    romaji=s.romaji,
-                    score=s.score,
-                ))
+            output_subs = [
+                replace(s, text=s.translated or s.text)
+                for s in subs
+            ]
             write_srt(output_subs, output)
-            self._update_progress(1.0, "翻译完成")
+            self._progress.update_progress(1.0, "翻译完成")
         except Exception as e:
-            self._log_msg(f"出错: {e}")
+            self._log.log(f"出错: {e}")
         finally:
             ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()

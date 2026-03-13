@@ -34,24 +34,23 @@ def transcribe(
             subs — List[Sub] 字幕列表
             word_data — List[List[WordInfo]] 每句的词级数据
     """
+    _log = log_callback or (lambda msg: None)
 
-    def _log(msg: str):
-        if log_callback:
-            log_callback(msg)
-
-    def _progress(pct: float, msg: str = ""):
+    def _progress(pct: float, msg: str = "") -> None:
         if progress_callback:
             progress_callback(min(pct, 1.0), msg)
 
-    _own_model = model is None
-    _progress(0.0, "加载模型..." if _own_model else "开始识别...")
-    if _own_model:
+    own_model = model is None
+    _progress(0.0, "加载模型..." if own_model else "开始识别...")
+    if own_model:
         from faster_whisper import WhisperModel
         model = WhisperModel("large-v3", device=device, compute_type="int8")
 
     _progress(0.02, "识别中...")
     segments, info = model.transcribe(
-        file_path, language=lang, word_timestamps=True,
+        file_path,
+        language=lang,
+        word_timestamps=True,
         condition_on_previous_text=condition_on_previous_text,
     )
 
@@ -59,19 +58,17 @@ def transcribe(
     word_data: List[List[WordInfo]] = []
 
     for i, seg in enumerate(segments, 1):
-        text_clean = seg.text.strip()
-
         subs.append(Sub(
             index=i,
             start=seg.start,
             end=seg.end,
-            text=text_clean,
+            text=seg.text.strip(),
         ))
 
-        seg_words: List[WordInfo] = []
-        if seg.words:
-            for w in seg.words:
-                seg_words.append(WordInfo(word=w.word, probability=w.probability))
+        seg_words = [
+            WordInfo(word=w.word, probability=w.probability)
+            for w in (seg.words or [])
+        ]
         word_data.append(seg_words)
 
         _progress(
@@ -79,13 +76,13 @@ def transcribe(
             f"识别中... {i} 条",
         )
 
-    if _own_model:
+    if own_model:
         from writansub.registry import ResourceRegistry
         reg = ResourceRegistry.instance()
         h = reg.register_model("whisper", model, device)
         reg.unload_model(h)
-    _progress(1.0, "识别完成")
 
+    _progress(1.0, "识别完成")
     return subs, word_data
 
 
@@ -108,6 +105,8 @@ def transcribe_to_srt(
     from writansub.core.srt_io import write_srt
     from writansub.core.review import generate_review, write_review_files
 
+    _log = log_callback or (lambda msg: None)
+
     subs, word_data = transcribe(
         file_path,
         lang=lang,
@@ -121,15 +120,13 @@ def transcribe_to_srt(
     srt_path = os.path.splitext(file_path)[0] + ".srt"
     write_srt(subs, srt_path)
 
-    mark_enabled = word_conf_threshold > 0.0
-    if mark_enabled:
+    if word_conf_threshold > 0.0:
         srt_content, ass_content, low_count, total_words = generate_review(
             subs, word_data, word_conf_threshold,
         )
         if low_count > 0:
             base = os.path.splitext(file_path)[0]
             write_review_files(base, srt_content, ass_content)
-            if log_callback:
-                log_callback(f"低置信词 {low_count}/{total_words}，已生成标记版")
+            _log(f"低置信词 {low_count}/{total_words}，已生成标记版")
 
     return srt_path

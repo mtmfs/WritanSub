@@ -53,23 +53,36 @@ PARAM_DEFS: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _load_json(path: str) -> Dict[str, Any]:
+    """读取 JSON 文件，失败时返回空字典"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_json(path: str, data: Dict[str, Any]) -> None:
+    """将数据写入 JSON 文件，写入失败时静默忽略"""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
+
+
 def load_pp_config() -> Dict[str, float]:
     """从配置文件加载后处理参数，文件不存在则返回默认值"""
+    raw = _load_json(_PP_CONFIG_PATH)
     try:
-        with open(_PP_CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        return {k: float(cfg.get(k, v)) for k, v in PP_DEFAULTS.items()}
-    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return {k: float(raw.get(k, v)) for k, v in PP_DEFAULTS.items()}
+    except ValueError:
         return dict(PP_DEFAULTS)
 
 
-def save_pp_config(values: Dict[str, float]):
+def save_pp_config(values: Dict[str, float]) -> None:
     """保存后处理参数到配置文件"""
-    try:
-        with open(_PP_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(values, f, indent=2)
-    except OSError:
-        pass
+    _save_json(_PP_CONFIG_PATH, values)
 
 
 # ── 翻译参数 ──────────────────────────────────────────
@@ -87,23 +100,15 @@ TRANSLATE_DEFAULTS: Dict[str, Any] = {
 
 def load_translate_config() -> Dict[str, Any]:
     """加载翻译配置"""
-    try:
-        with open(_TRANSLATE_CONFIG_PATH, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-        result = dict(TRANSLATE_DEFAULTS)
-        result.update({k: cfg[k] for k in TRANSLATE_DEFAULTS if k in cfg})
-        return result
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return dict(TRANSLATE_DEFAULTS)
+    raw = _load_json(_TRANSLATE_CONFIG_PATH)
+    result = dict(TRANSLATE_DEFAULTS)
+    result.update({k: raw[k] for k in TRANSLATE_DEFAULTS if k in raw})
+    return result
 
 
-def save_translate_config(values: Dict[str, Any]):
+def save_translate_config(values: Dict[str, Any]) -> None:
     """保存翻译配置"""
-    try:
-        with open(_TRANSLATE_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(values, f, indent=2, ensure_ascii=False)
-    except OSError:
-        pass
+    _save_json(_TRANSLATE_CONFIG_PATH, values)
 
 
 # ── GUI 状态持久化 ──────────────────────────────────────
@@ -113,17 +118,9 @@ _GUI_STATE_PATH = os.path.join(_PROJECT_ROOT, "gui_state.json")
 
 def load_gui_state() -> Dict[str, Any]:
     """加载 GUI 状态，文件不存在返回空字典"""
-    try:
-        with open(_GUI_STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return {}
+    return _load_json(_GUI_STATE_PATH)
 
 
-def save_gui_state(state: Dict[str, Any]):
+def save_gui_state(state: Dict[str, Any]) -> None:
     """保存 GUI 状态到 gui_state.json"""
-    try:
-        with open(_GUI_STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
-    except OSError:
-        pass
+    _save_json(_GUI_STATE_PATH, state)

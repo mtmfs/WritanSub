@@ -2,7 +2,6 @@
 
 import sys
 import threading
-from typing import Dict
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
@@ -10,7 +9,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.core.types import AUDIO_FILETYPES, SRT_FILETYPES, LANGUAGES
+from writansub.core.types import LANGUAGES
 from writansub.core.srt_io import parse_srt, write_srt
 from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
 from writansub.config import load_gui_state, save_gui_state
@@ -242,7 +241,7 @@ class AlignmentTab(QWidget):
         thread.start()
 
     def _run_alignment(self, audio: str, srt: str, output: str,
-                       device: str, pp: Dict[str, float],
+                       device: str, pp: dict[str, float],
                        lang: str = "ja"):
         import torch
 

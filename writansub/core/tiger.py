@@ -1,9 +1,8 @@
-﻿"""TIGER 语音分离逻辑 (DnR) + 说话人分离 (Speech) + VAD 重叠检测"""
+"""TIGER 语音分离逻辑 (DnR) + 说话人分离 (Speech) + VAD 重叠检测"""
 
 import os
 import shutil
 import wave
-import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, Tuple
 
@@ -43,7 +42,7 @@ def load_audio_for_tiger(path: str, target_sr: int = 44100) -> Tuple[torch.Tenso
     return waveform, target_sr
 
 
-def save_wav(waveform: torch.Tensor, path: str, sr: int):
+def save_wav(waveform: torch.Tensor, path: str, sr: int) -> None:
     """保存 waveform [C, T] 为 16-bit WAV"""
     if waveform.dim() == 1:
         waveform = waveform.unsqueeze(0)
@@ -82,37 +81,46 @@ def separate_dnr(
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """DnR 语音增强分离"""
-    _log = log_callback or (lambda msg: None)
-    _progress = progress_callback or (lambda p, m: None)
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
+    def _progress(pct: float, msg: str) -> None:
+        if progress_callback:
+            progress_callback(pct, msg)
+
     reg = ResourceRegistry.instance()
 
     dnr_sr = 44100
     if sr != dnr_sr:
         waveform = T.Resample(sr, dnr_sr)(waveform)
 
-    def _factory():
+    def _factory() -> Any:
         _log("加载 TIGER-DnR 模型...")
         return _load_dnr_model(device, cache_dir)
 
     h = reg.acquire_model("tiger_dnr", device, _factory)
     model = reg.get_model(h)
 
-    mixture = waveform.unsqueeze(0).to(device)  # [1, 1, T]
-    track_names = ["人声", "音效", "伴奏"]
-    track_indices = [2, 1, 0]
-    sub_models = [model.dialog, model.effect, model.music]
+    # 每条轨道：(子模型, 显示名称, wav_chunk_inference 输出索引)
+    tracks = [
+        (model.dialog, "人声", 2),
+        (model.effect, "音效", 1),
+        (model.music,  "伴奏", 0),
+    ]
 
+    mixture = waveform.unsqueeze(0).to(device)  # [1, 1, T]
     results = []
     try:
-        for i, (sub_model, name, idx) in enumerate(zip(sub_models, track_names, track_indices)):
-            _log(f"正在分离 {name} ({i+1}/3) ...")
+        for i, (sub_model, name, idx) in enumerate(tracks):
+            _log(f"正在分离 {name} ({i + 1}/3) ...")
             _progress(i / 3.0, f"正在分离 {name}...")
             track = model.wav_chunk_inference(sub_model, mixture)[idx]
             results.append(track.cpu())
-        dialog, effects, music = results
     finally:
         reg.release_model(h)
 
+    dialog, effects, music = results
     return dialog, effects, music
 
 
@@ -121,54 +129,51 @@ def _chunk_inference(
     mixture: torch.Tensor,
     sr: int,
     n_tracks: int = 2,
-    target_length: float = 12.0,
+    chunk_length: float = 12.0,
     hop_length: float = 4.0,
 ) -> torch.Tensor:
-    """真正的分块推理，防止长音频导致的显存溢出 (OOM)"""
+    """分块推理，防止长音频导致的显存溢出 (OOM)"""
     device = mixture.device
     batch_length = mixture.shape[-1]
 
-    session = int(sr * target_length)
-    target = int(sr * target_length)
-    ignore = (session - target) // 2
+    chunk_size = int(sr * chunk_length)
     hop = int(sr * hop_length)
-    tr_ratio = target_length / hop_length
+    tr_ratio = chunk_length / hop_length
 
-    batch_mixture_pad = mixture
-    if ignore > 0:
-        pad = torch.zeros(mixture.shape[0], mixture.shape[1], ignore,
-                          dtype=mixture.dtype, device=device)
-        batch_mixture_pad = torch.cat([pad, batch_mixture_pad, pad], -1)
-    if target - hop > 0:
-        pad = torch.zeros(mixture.shape[0], mixture.shape[1], target - hop,
-                          dtype=mixture.dtype, device=device)
-        batch_mixture_pad = torch.cat([pad, batch_mixture_pad, pad], -1)
+    # 在两端填充 hop 长度，确保首尾块有足够的上下文
+    edge_pad = torch.zeros(
+        mixture.shape[0], mixture.shape[1], chunk_size - hop,
+        dtype=mixture.dtype, device=device,
+    )
+    padded = torch.cat([edge_pad, mixture, edge_pad], dim=-1)
 
-    skip_idx = ignore + target - hop
-    zero_pad = torch.zeros(mixture.shape[0], mixture.shape[1], session,
-                           dtype=mixture.dtype, device=device)
-    num_session = (batch_mixture_pad.shape[-1] - session) // hop + 2
-    
-    all_target = torch.zeros(
-        mixture.shape[0], n_tracks, mixture.shape[1], batch_mixture_pad.shape[2],
+    skip_idx = chunk_size - hop
+    zero_pad = torch.zeros(
+        mixture.shape[0], mixture.shape[1], chunk_size,
+        dtype=mixture.dtype, device=device,
+    )
+    num_chunks = (padded.shape[-1] - chunk_size) // hop + 2
+
+    accumulator = torch.zeros(
+        mixture.shape[0], n_tracks, mixture.shape[1], padded.shape[-1],
         device=device,
     )
 
-    for i in range(num_session):
-        chunk = batch_mixture_pad[:, :, i * hop:i * hop + session]
+    for i in range(num_chunks):
+        chunk = padded[:, :, i * hop:i * hop + chunk_size]
         curr_len = chunk.shape[-1]
-        if curr_len < session:
-            chunk = torch.cat([chunk, zero_pad[:, :, :session - curr_len]], -1)
-        
+        if curr_len < chunk_size:
+            chunk = torch.cat([chunk, zero_pad[:, :, :chunk_size - curr_len]], dim=-1)
+
         # 逐块推理，不进行批量拼接
         with torch.no_grad():
             est = model(chunk).unsqueeze(2)  # [1, n_tracks, 1, T]
-        
-        seg = est[0, :, :, :curr_len][:, :, ignore:ignore + target].unsqueeze(0)
-        all_target[:, :, :, ignore + i * hop:ignore + i * hop + target] += seg
 
-    all_target = all_target[:, :, :, skip_idx:skip_idx + batch_length].contiguous() / tr_ratio
-    return all_target.squeeze(0)
+        seg = est[0, :, :, :curr_len][:, :, :chunk_size].unsqueeze(0)
+        accumulator[:, :, :, i * hop:i * hop + chunk_size] += seg
+
+    output = accumulator[:, :, :, skip_idx:skip_idx + batch_length].contiguous() / tr_ratio
+    return output.squeeze(0)
 
 
 def separate_speakers(
@@ -179,7 +184,10 @@ def separate_speakers(
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """说话人分离"""
-    _log = log_callback or (lambda msg: None)
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
     reg = ResourceRegistry.instance()
 
     speech_sr = 16000
@@ -187,7 +195,7 @@ def separate_speakers(
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)
 
-    def _factory():
+    def _factory() -> Any:
         _log("加载 TIGER-Speech 模型...")
         return _load_speech_model(device, cache_dir)
 
@@ -204,7 +212,9 @@ def separate_speakers(
     finally:
         reg.release_model(h)
 
-    return separated[0:1].squeeze(1), separated[1:2].squeeze(1)
+    spk1 = separated[0].unsqueeze(0)
+    spk2 = separated[1].unsqueeze(0)
+    return spk1, spk2
 
 
 def _run_silero_vad(waveform: torch.Tensor, sr: int = 16000, threshold: float = 0.5) -> List[TimeSpan]:
@@ -246,7 +256,9 @@ def detect_overlaps(
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> Tuple[List[TimeSpan], float]:
     """重叠区域检测"""
-    _log = log_callback or (lambda msg: None)
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
 
     _log("正在对说话人 1 进行 VAD 检测...")
     vad_1 = _run_silero_vad(spk1_wav, sr, vad_threshold)
@@ -263,6 +275,22 @@ def detect_overlaps(
     return overlaps, overlap_ratio
 
 
+def _make_file_progress(
+    idx: int,
+    total: int,
+    progress_callback: Optional[Callable[[float, str], None]],
+) -> Callable[[float, str], None]:
+    """构建单文件进度回调，将局部进度 [0,1] 映射到全局进度"""
+    base = idx / total
+    scale = 1.0 / total
+
+    def _progress(pct: float, msg: str) -> None:
+        if progress_callback:
+            progress_callback(base + pct * scale, msg)
+
+    return _progress
+
+
 def run_dnr_batch(
     media_files: List[str],
     device: str = "cpu",
@@ -271,24 +299,24 @@ def run_dnr_batch(
     log_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> dict:
-    _log = log_callback or (lambda msg: None)
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
     results = {}
     total = len(media_files)
 
     for idx, media in enumerate(media_files):
-        base_pct = idx / total
-        file_pct = 1.0 / total
+        file_info = f"[{idx + 1}/{total}]"
+        _file_progress = _make_file_progress(idx, total, progress_callback)
 
-        def _dnr_progress(pct, msg, _base=base_pct, _fp=file_pct):
-            if progress_callback:
-                progress_callback(_base + pct * _fp, msg)
-
-        _dnr_progress(0.0, "正在加载音频...")
+        _file_progress(0.0, f"{file_info} 正在加载音频...")
         waveform, sr = load_audio_for_tiger(media, target_sr=44100)
-        
+
         dialog, effects, music = separate_dnr(
             waveform, sr, device=device, cache_dir=cache_dir,
-            log_callback=_log, progress_callback=_dnr_progress,
+            log_callback=_log,
+            progress_callback=lambda pct, msg, _fp=_file_progress, _fi=file_info: _fp(pct, f"{_fi} {msg}"),
         )
 
         if save_intermediate:
@@ -310,23 +338,20 @@ def run_speech_batch(
     log_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None,
 ) -> None:
-    _log = log_callback or (lambda msg: None)
+    def _log(msg: str) -> None:
+        if log_callback:
+            log_callback(msg)
+
     media_list = list(dnr_results.keys())
     total = len(media_list)
 
     for idx, media in enumerate(media_list):
         data = dnr_results[media]
-        dialog = data["dialog_wav"]
-        base_pct = idx / total
-        file_pct = 1.0 / total
+        _file_progress = _make_file_progress(idx, total, progress_callback)
 
-        def _progress(pct, msg, _base=base_pct, _fp=file_pct):
-            if progress_callback:
-                progress_callback(_base + pct * _fp, msg)
-
-        _progress(0.0, "正在分离说话人...")
+        _file_progress(0.0, "正在分离说话人...")
         spk1, spk2 = separate_speakers(
-            dialog, 44100, device=device, cache_dir=cache_dir, log_callback=_log,
+            data["dialog_wav"], 44100, device=device, cache_dir=cache_dir, log_callback=_log,
         )
 
         if save_intermediate:
@@ -335,7 +360,7 @@ def run_speech_batch(
             save_wav(spk1, os.path.join(out_dir, f"{bname}_spk1.wav"), 16000)
             save_wav(spk2, os.path.join(out_dir, f"{bname}_spk2.wav"), 16000)
 
-        _progress(0.7, "正在进行 VAD 检测...")
+        _file_progress(0.7, "正在进行 VAD 检测...")
         overlaps, overlap_ratio = detect_overlaps(spk1, spk2, sr=16000, log_callback=_log)
 
         data.update({
@@ -345,4 +370,4 @@ def run_speech_batch(
             "overlap_regions": overlaps,
             "overlap_ratio": overlap_ratio,
         })
-        _progress(1.0, "完成")
+        _file_progress(1.0, "完成")

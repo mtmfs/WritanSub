@@ -65,11 +65,10 @@ class TigerStep(PipelineStep):
     def execute(self, inputs, log_callback, cancelled, progress_callback=None):
         from writansub.core.tiger import run_tiger_separation
 
-        media_file = inputs["media_file"]
-
         if cancelled():
             return {}
 
+        media_file = inputs["media_file"]
         result = run_tiger_separation(
             media_file,
             mode=self.mode,
@@ -80,11 +79,11 @@ class TigerStep(PipelineStep):
             progress_callback=progress_callback,
         )
 
-        outputs = {"media_file": media_file}
-
-        # 降噪模式：传递对话轨供 Whisper 使用
-        outputs["dialog_wav"] = result["dialog_wav"]
-        outputs["dialog_sr"] = result["dialog_sr"]
+        outputs = {
+            "media_file": media_file,
+            "dialog_wav": result["dialog_wav"],
+            "dialog_sr": result["dialog_sr"],
+        }
 
         # 分轨模式：额外传递分离轨和重叠信息
         if self.mode == "separate":
@@ -154,9 +153,6 @@ class WhisperStep(PipelineStep):
     ) -> str:
         """完整 Whisper + 重叠段局部替换"""
         import tempfile
-        import torchaudio
-        from writansub.core.srt_io import write_srt
-        from writansub.core.review import generate_review, write_review_files
         from writansub.core.tiger import save_wav
 
         log_callback("完整音频 Whisper 识别...")
@@ -182,7 +178,7 @@ class WhisperStep(PipelineStep):
         spk1_wav, spk2_wav = separated_tracks
 
         # 2. 对每个重叠段，用分离轨跑 Whisper
-        overlap_subs_map = {}  # (start, end) -> List[Sub]
+        overlap_subs_map: Dict[tuple, List[Sub]] = {}
         for region in overlap_regions:
             if cancelled():
                 return ""
@@ -190,7 +186,7 @@ class WhisperStep(PipelineStep):
             start_sample = int(region.start * spk_sr)
             end_sample = int(region.end * spk_sr)
 
-            for spk_idx, spk_wav in enumerate([spk1_wav, spk2_wav], 1):
+            for spk_wav in [spk1_wav, spk2_wav]:
                 chunk = spk_wav[:, start_sample:end_sample]
                 if chunk.shape[1] < 1600:  # < 0.1s
                     continue
@@ -218,41 +214,28 @@ class WhisperStep(PipelineStep):
                     except OSError:
                         pass
 
-        # 3. 合并：标记重叠段的完整 Whisper 结果为 commented，插入局部结果
-        merged = []
-        overlap_inserts = []  # 收集所有局部结果
-
+        # 3. 标记重叠段的完整 Whisper 结果，插入局部结果，按时间排序
         for sub in full_subs:
-            is_overlap = False
-            for region in overlap_regions:
-                # 字幕中心点在重叠区间内就算重叠
-                mid = (sub.start + sub.end) / 2
-                if region.start <= mid <= region.end:
-                    sub.commented = True
-                    is_overlap = True
-                    break
-            merged.append(sub)
+            mid = (sub.start + sub.end) / 2
+            if any(region.start <= mid <= region.end for region in overlap_regions):
+                sub.commented = True
 
-        for key, local_subs in overlap_subs_map.items():
-            overlap_inserts.extend(local_subs)
-
-        # 插入局部结果并按时间排序（未注释的 + 局部结果）
-        active_subs = [s for s in merged if not s.commented]
-        active_subs.extend(overlap_inserts)
+        overlap_inserts = [s for subs in overlap_subs_map.values() for s in subs]
+        active_subs = [s for s in full_subs if not s.commented] + overlap_inserts
         active_subs.sort(key=lambda s: s.start)
         for i, s in enumerate(active_subs, 1):
             s.index = i
 
+        replaced_count = sum(1 for s in full_subs if s.commented)
         log_callback(
             f"合并完成: {len(active_subs)} 条有效字幕, "
-            f"{sum(1 for s in merged if s.commented)} 条被替换"
+            f"{replaced_count} 条被替换"
         )
 
         return self._write_output(media_file, active_subs, [[] for _ in active_subs])
 
     def _write_output(self, media_file, subs, word_data) -> str:
         """写 SRT 和 review 文件"""
-        from writansub.core.srt_io import write_srt
         from writansub.core.review import generate_review, write_review_files
 
         srt_path = os.path.splitext(media_file)[0] + ".srt"
@@ -294,13 +277,13 @@ class ForceAlignStep(PipelineStep):
     def execute(self, inputs, log_callback, cancelled, progress_callback=None):
         import torch
 
-        media_file = inputs["media_file"]
-        srt_path = inputs["srt"]
-
         device = self.device
         if device == "cuda" and not torch.cuda.is_available():
             log_callback("CUDA 不可用，回退到 CPU")
             device = "cpu"
+
+        media_file = inputs["media_file"]
+        srt_path = inputs["srt"]
 
         waveform = load_audio(media_file)
         subs = parse_srt(srt_path, lang=self.lang)
@@ -314,6 +297,7 @@ class ForceAlignStep(PipelineStep):
 
         if cancelled():
             return {}
+
         final = post_process(
             aligned,
             extend_end=self.extend_end,
@@ -326,6 +310,7 @@ class ForceAlignStep(PipelineStep):
         base = srt_path.rsplit('.', 1)[0]
         output_path = f"{base}_aligned.srt"
         write_srt(final, output_path)
+
         if self.align_conf_threshold > 0:
             low_align = {s.index for s in final if s.score < self.align_conf_threshold}
             if low_align:
@@ -366,7 +351,7 @@ class TranslateStep(PipelineStep):
             batch_size=self.batch_size,
             log_callback=log_callback,
             progress_callback=progress_callback,
-            cancelled=lambda: cancelled(),
+            cancelled=cancelled,
         )
         return {"translated_srt": output}
 
@@ -411,7 +396,9 @@ class PipelineOrchestrator:
         """
         self._cancelled = False
         retention = retention_flags or {}
+        n_steps = len(self._steps)
         all_intermediates: Dict[str, List[str]] = {}  # step_name -> files
+        last_step_name = self._steps[-1].name if self._steps else ""
 
         current = dict(initial_inputs)
 
@@ -420,14 +407,11 @@ class PipelineOrchestrator:
                 log_callback("流水线已取消")
                 return current
 
-            log_callback(f"步骤 {i}/{len(self._steps)}: {step.display_name}")
-
-            n_steps = len(self._steps)
+            log_callback(f"步骤 {i}/{n_steps}: {step.display_name}")
 
             def _step_progress(pct, msg, _i=i):
                 if progress_callback:
-                    overall = ((_i - 1) + pct) / n_steps
-                    progress_callback(overall, msg)
+                    progress_callback((_i - 1 + pct) / n_steps, msg)
 
             prev_inputs = dict(current)
             outputs = step.execute(
@@ -441,16 +425,14 @@ class PipelineOrchestrator:
                 log_callback("流水线已取消")
                 return current
 
-            intermediates = step.get_intermediate_files(prev_inputs, outputs)
-            all_intermediates[step.name] = intermediates
-
+            all_intermediates[step.name] = step.get_intermediate_files(prev_inputs, outputs)
             current.update(outputs)
 
         for step_name, files in all_intermediates.items():
             if retention.get(step_name, False):
                 log_callback(f"保留 {step_name} 中间文件")
                 continue
-            if step_name == self._steps[-1].name:
+            if step_name == last_step_name:
                 continue
             for f in files:
                 if f and os.path.isfile(f):

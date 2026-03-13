@@ -16,6 +16,18 @@ gui_state.json
 
 # 本地工具脚本
 push.bat
+push_pyside6.bat
+
+# Rust 编译产物
+native/target/
+
+# 模型缓存
+cache/
+
+# 临时文档 & 草稿
+Audit_Report_*.txt
+Compact_GUI_Layout_Proposal.html
+方案*.txt
 
 # 敏感文件 & 个人笔记
 开发者文件/
