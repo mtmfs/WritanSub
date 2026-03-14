@@ -10,14 +10,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject
 
-from writansub.core.types import LANGUAGES
-from writansub.core.srt_io import write_srt, populate_romaji, merge_bilingual
-from writansub.core.whisper import transcribe
-from writansub.core.review import generate_review, write_review_files, mark_low_align_in_review
-from writansub.core.alignment import load_audio, run_alignment, post_process, init_model
-from writansub.core.translate import translate_subs
+from writansub.types import LANGUAGES
+from writansub.subtitle.srt_io import write_srt, populate_romaji, merge_bilingual
+from writansub.transcribe.core import transcribe
+from writansub.subtitle.review import generate_review, write_review_files, mark_low_align_in_review
+from writansub.align.core import load_audio, run_alignment, post_process, init_model
+from writansub.translate.core import translate_subs
 from writansub.config import load_gui_state, save_gui_state, load_translate_config
-from writansub.registry import ResourceRegistry
+from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import (
     TextRedirector, LogWidget, ProgressWidget, build_params_grid,
     NoScrollComboBox,
@@ -495,7 +495,7 @@ class PipelineTab(QWidget):
                          num_phases, log_emit, prog_emit) -> dict:
         """执行 TIGER 增强阶段，返回 tiger_results"""
         log_emit(f">>> Phase 1/{num_phases}: TIGER 增强")
-        from writansub.core.tiger import run_dnr_batch, run_speech_batch
+        from writansub.preprocess.core import run_dnr_batch, run_speech_batch
 
         do_speech = (tiger_mode == "separate")
         dnr_weight = 0.5 if do_speech else 1.0
@@ -526,7 +526,7 @@ class PipelineTab(QWidget):
         tmp_dialog = None
 
         if tiger_data and "dialog_wav" in tiger_data:
-            from writansub.core.tiger import save_wav
+            from writansub.preprocess.core import save_wav
             import tempfile
             tmp_dialog = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             tmp_dialog.close()
@@ -564,7 +564,7 @@ class PipelineTab(QWidget):
                               progress_callback):
         """重叠区域分轨转录并合并结果"""
         import tempfile
-        from writansub.core.tiger import save_wav
+        from writansub.preprocess.core import save_wav
 
         full_subs, full_word_data = transcribe(
             media, lang=lang, device=device,

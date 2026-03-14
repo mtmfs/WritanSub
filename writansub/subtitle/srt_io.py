@@ -3,13 +3,13 @@
 import dataclasses
 from typing import List
 
-from writansub.core.types import Sub, fmt_srt_time
+from writansub.types import Sub, fmt_srt_time
 
 
 def parse_srt(path: str, lang: str = "ja") -> List[Sub]:
     """解析 SRT 文件"""
     import pysrt
-    from writansub.core.alignment import text_to_romaji
+    from writansub.align.core import text_to_romaji
 
     subs = pysrt.open(path, encoding='utf-8')
     result = []
@@ -36,7 +36,7 @@ def write_srt(subs: List[Sub], path: str) -> None:
 
 def populate_romaji(subs: List[Sub], lang: str) -> None:
     """为 Sub 列表填充 romaji 字段（原地修改）。"""
-    from writansub.core.alignment import text_to_romaji
+    from writansub.align.core import text_to_romaji
 
     for sub in subs:
         if not sub.romaji:

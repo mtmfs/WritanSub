@@ -3,7 +3,7 @@
 import os
 from typing import Any, Callable, List, Optional, Tuple
 
-from writansub.core.types import Sub, WordInfo
+from writansub.types import Sub, WordInfo
 
 
 def transcribe(
@@ -77,7 +77,7 @@ def transcribe(
         )
 
     if own_model:
-        from writansub.registry import ResourceRegistry
+        from writansub.bridge import ResourceRegistry
         reg = ResourceRegistry.instance()
         h = reg.register_model("whisper", model, device)
         reg.unload_model(h)
@@ -102,8 +102,8 @@ def transcribe_to_srt(
     Returns:
         生成的 SRT 文件路径 (干净版)
     """
-    from writansub.core.srt_io import write_srt
-    from writansub.core.review import generate_review, write_review_files
+    from writansub.subtitle.srt_io import write_srt
+    from writansub.subtitle.review import generate_review, write_review_files
 
     _log = log_callback or (lambda msg: None)
 

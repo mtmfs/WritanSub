@@ -10,11 +10,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.core.types import TRANSLATE_TARGETS
-from writansub.core.srt_io import parse_srt, write_srt
-from writansub.core.translate import translate_subs
+from writansub.types import TRANSLATE_TARGETS
+from writansub.subtitle.srt_io import parse_srt, write_srt
+from writansub.translate.core import translate_subs
 from writansub.config import load_translate_config, save_translate_config, load_gui_state, save_gui_state
-from writansub.registry import ResourceRegistry
+from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox
 
 # 状态字段 → (widget 属性, setter/getter 类型)

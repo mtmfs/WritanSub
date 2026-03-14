@@ -4,11 +4,9 @@ import json
 import os
 from typing import Any, Dict
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from writansub.paths import PP_CONFIG_PATH, TRANSLATE_CONFIG_PATH, GUI_STATE_PATH
 
 # ── 后处理参数 ──────────────────────────────────────────
-
-_PP_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "aitrans_pp.json")
 
 PP_DEFAULTS: Dict[str, float] = {
     "extend_end": 0.30,
@@ -73,7 +71,7 @@ def _save_json(path: str, data: Dict[str, Any]) -> None:
 
 def load_pp_config() -> Dict[str, float]:
     """从配置文件加载后处理参数，文件不存在则返回默认值"""
-    raw = _load_json(_PP_CONFIG_PATH)
+    raw = _load_json(PP_CONFIG_PATH)
     try:
         return {k: float(raw.get(k, v)) for k, v in PP_DEFAULTS.items()}
     except ValueError:
@@ -82,12 +80,10 @@ def load_pp_config() -> Dict[str, float]:
 
 def save_pp_config(values: Dict[str, float]) -> None:
     """保存后处理参数到配置文件"""
-    _save_json(_PP_CONFIG_PATH, values)
+    _save_json(PP_CONFIG_PATH, values)
 
 
 # ── 翻译参数 ──────────────────────────────────────────
-
-_TRANSLATE_CONFIG_PATH = os.path.join(_PROJECT_ROOT, "aitrans_translate.json")
 
 TRANSLATE_DEFAULTS: Dict[str, Any] = {
     "api_base": "https://api.deepseek.com/v1",
@@ -100,7 +96,7 @@ TRANSLATE_DEFAULTS: Dict[str, Any] = {
 
 def load_translate_config() -> Dict[str, Any]:
     """加载翻译配置"""
-    raw = _load_json(_TRANSLATE_CONFIG_PATH)
+    raw = _load_json(TRANSLATE_CONFIG_PATH)
     result = dict(TRANSLATE_DEFAULTS)
     result.update({k: raw[k] for k in TRANSLATE_DEFAULTS if k in raw})
     return result
@@ -108,19 +104,16 @@ def load_translate_config() -> Dict[str, Any]:
 
 def save_translate_config(values: Dict[str, Any]) -> None:
     """保存翻译配置"""
-    _save_json(_TRANSLATE_CONFIG_PATH, values)
+    _save_json(TRANSLATE_CONFIG_PATH, values)
 
 
 # ── GUI 状态持久化 ──────────────────────────────────────
 
-_GUI_STATE_PATH = os.path.join(_PROJECT_ROOT, "gui_state.json")
-
-
 def load_gui_state() -> Dict[str, Any]:
     """加载 GUI 状态，文件不存在返回空字典"""
-    return _load_json(_GUI_STATE_PATH)
+    return _load_json(GUI_STATE_PATH)
 
 
 def save_gui_state(state: Dict[str, Any]) -> None:
     """保存 GUI 状态到 gui_state.json"""
-    _save_json(_GUI_STATE_PATH, state)
+    _save_json(GUI_STATE_PATH, state)

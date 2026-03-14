@@ -4,12 +4,12 @@ import abc
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from writansub.core.types import Sub
-from writansub.core.srt_io import parse_srt, write_srt
-from writansub.core.review import mark_low_align_in_review
-from writansub.core.whisper import transcribe, transcribe_to_srt
-from writansub.core.alignment import load_audio, run_alignment, post_process
-from writansub.core.translate import translate_srt
+from writansub.types import Sub
+from writansub.subtitle.srt_io import parse_srt, write_srt
+from writansub.subtitle.review import mark_low_align_in_review
+from writansub.transcribe.core import transcribe, transcribe_to_srt
+from writansub.align.core import load_audio, run_alignment, post_process
+from writansub.translate.core import translate_srt
 
 
 class PipelineStep(abc.ABC):
@@ -26,32 +26,14 @@ class PipelineStep(abc.ABC):
         cancelled: Callable[[], bool],
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, Any]:
-        """
-        执行步骤。
-
-        Args:
-            inputs: 上一步输出的文件路径字典
-            log_callback: 日志回调
-            cancelled: 返回 True 表示用户已取消
-            progress_callback: 进度回调 (0.0~1.0, 状态文本)
-
-        Returns:
-            输出文件路径字典，合并入下一步的 inputs
-        """
         ...
 
     def get_intermediate_files(self, inputs: Dict[str, Any], outputs: Dict[str, Any]) -> List[str]:
-        """返回此步骤产生的中间文件路径列表（可选清理）"""
         return []
 
 
 class TigerStep(PipelineStep):
-    """TIGER 音频分离步骤（前处理，可选）
-
-    mode:
-        "denoise"  — 仅 DnR 降噪，输出干净对话轨供后续 Whisper 使用
-        "separate" — 降噪 + 说话人分轨 + VAD 重叠检测
-    """
+    """TIGER 音频分离步骤（前处理，可选）"""
     name = "tiger"
     display_name = "TIGER 音频分离"
 
@@ -63,7 +45,7 @@ class TigerStep(PipelineStep):
         self.save_intermediate = save_intermediate
 
     def execute(self, inputs, log_callback, cancelled, progress_callback=None):
-        from writansub.core.tiger import run_tiger_separation
+        from writansub.preprocess.core import run_tiger_separation
 
         if cancelled():
             return {}
@@ -85,7 +67,6 @@ class TigerStep(PipelineStep):
             "dialog_sr": result["dialog_sr"],
         }
 
-        # 分轨模式：额外传递分离轨和重叠信息
         if self.mode == "separate":
             outputs["separated_tracks"] = (result["spk1_wav"], result["spk2_wav"])
             outputs["spk_sr"] = result["spk_sr"]
@@ -96,11 +77,7 @@ class TigerStep(PipelineStep):
 
 
 class WhisperStep(PipelineStep):
-    """Whisper 语音识别步骤
-
-    当 inputs 中包含 overlap_regions 和 separated_tracks 时（来自 TigerStep），
-    会对完整音频跑 Whisper 后，用分离轨的局部结果替换重叠段。
-    """
+    """Whisper 语音识别步骤"""
     name = "whisper"
     display_name = "Whisper 语音识别"
 
@@ -127,14 +104,12 @@ class WhisperStep(PipelineStep):
         separated_tracks = inputs.get("separated_tracks")
 
         if overlap_regions and separated_tracks:
-            # TIGER 分轨模式：完整 Whisper + 局部替换
             srt_path = self._run_with_overlap(
                 media_file, overlap_regions, separated_tracks,
                 inputs.get("spk_sr", 16000),
                 device, log_callback, cancelled, progress_callback,
             )
         else:
-            # 普通模式 / 仅降噪模式
             srt_path = transcribe_to_srt(
                 media_file,
                 lang=self.lang,
@@ -151,13 +126,12 @@ class WhisperStep(PipelineStep):
         self, media_file, overlap_regions, separated_tracks, spk_sr,
         device, log_callback, cancelled, progress_callback,
     ) -> str:
-        """完整 Whisper + 重叠段局部替换"""
         import tempfile
-        from writansub.core.tiger import save_wav
+        from writansub.preprocess.core import save_wav
+        from writansub.subtitle.review import generate_review, write_review_files
 
         log_callback("完整音频 Whisper 识别...")
 
-        # 1. 完整音频跑 Whisper
         full_subs, full_word_data = transcribe(
             media_file,
             lang=self.lang,
@@ -171,13 +145,11 @@ class WhisperStep(PipelineStep):
             return ""
 
         if not overlap_regions:
-            # 无重叠段，直接输出
             return self._write_output(media_file, full_subs, full_word_data)
 
         log_callback(f"处理 {len(overlap_regions)} 个重叠段...")
         spk1_wav, spk2_wav = separated_tracks
 
-        # 2. 对每个重叠段，用分离轨跑 Whisper
         overlap_subs_map: Dict[tuple, List[Sub]] = {}
         for region in overlap_regions:
             if cancelled():
@@ -188,10 +160,9 @@ class WhisperStep(PipelineStep):
 
             for spk_wav in [spk1_wav, spk2_wav]:
                 chunk = spk_wav[:, start_sample:end_sample]
-                if chunk.shape[1] < 1600:  # < 0.1s
+                if chunk.shape[1] < 1600:
                     continue
 
-                # 保存到临时文件给 Whisper
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     tmp_path = f.name
                 try:
@@ -202,7 +173,6 @@ class WhisperStep(PipelineStep):
                         device=device,
                         condition_on_previous_text=False,
                     )
-                    # 偏移时间戳到全局时间
                     for s in local_subs:
                         s.start += region.start
                         s.end += region.start
@@ -214,7 +184,6 @@ class WhisperStep(PipelineStep):
                     except OSError:
                         pass
 
-        # 3. 标记重叠段的完整 Whisper 结果，插入局部结果，按时间排序
         for sub in full_subs:
             mid = (sub.start + sub.end) / 2
             if any(region.start <= mid <= region.end for region in overlap_regions):
@@ -235,8 +204,7 @@ class WhisperStep(PipelineStep):
         return self._write_output(media_file, active_subs, [[] for _ in active_subs])
 
     def _write_output(self, media_file, subs, word_data) -> str:
-        """写 SRT 和 review 文件"""
-        from writansub.core.review import generate_review, write_review_files
+        from writansub.subtitle.review import generate_review, write_review_files
 
         srt_path = os.path.splitext(media_file)[0] + ".srt"
         write_srt(subs, srt_path)
@@ -383,21 +351,10 @@ class PipelineOrchestrator:
         retention_flags: Optional[Dict[str, bool]] = None,
         progress_callback: Optional[Callable[[float, str], None]] = None,
     ) -> Dict[str, Any]:
-        """
-        执行完整流水线。
-
-        Args:
-            initial_inputs: 初始输入 (如 {"media_file": "..."})
-            log_callback: 日志回调
-            retention_flags: {step.name: True/False} 是否保留中间文件
-
-        Returns:
-            最终输出字典
-        """
         self._cancelled = False
         retention = retention_flags or {}
         n_steps = len(self._steps)
-        all_intermediates: Dict[str, List[str]] = {}  # step_name -> files
+        all_intermediates: Dict[str, List[str]] = {}
         last_step_name = self._steps[-1].name if self._steps else ""
 
         current = dict(initial_inputs)

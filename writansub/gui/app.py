@@ -7,11 +7,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 
 from writansub.config import load_gui_state, save_gui_state
-from writansub.gui.alignment_tab import AlignmentTab
-from writansub.gui.pipeline_tab import PipelineTab
-from writansub.gui.tiger_tab import TigerTab
-from writansub.gui.translate_tab import TranslateTab
-from writansub.gui.whisper_tab import WhisperTab
+from writansub.gui.tabs.align import AlignmentTab
+from writansub.gui.tabs.pipeline import PipelineTab
+from writansub.gui.tabs.preprocess import TigerTab
+from writansub.gui.tabs.translate import TranslateTab
+from writansub.gui.tabs.transcribe import WhisperTab
 
 # (标签名, Tab 类) — 顺序即 UI 中的显示顺序
 _TAB_DEFS = [
@@ -48,7 +48,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """关闭时：停止所有资源 → 保存 GUI 状态"""
-        from writansub.registry import ResourceRegistry
+        from writansub.bridge import ResourceRegistry
 
         ResourceRegistry.instance().shutdown()
 

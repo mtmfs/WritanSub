@@ -10,12 +10,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.core.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
-from writansub.core.whisper import transcribe
-from writansub.core.review import generate_review, write_review_files
-from writansub.core.srt_io import write_srt
+from writansub.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
+from writansub.transcribe.core import transcribe
+from writansub.subtitle.review import generate_review, write_review_files
+from writansub.subtitle.srt_io import write_srt
 from writansub.config import PARAM_DEFS, load_gui_state, save_gui_state
-from writansub.registry import ResourceRegistry
+from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, ParamSpinBox
 
 

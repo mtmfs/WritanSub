@@ -4,7 +4,7 @@ import os
 import re
 from typing import Callable, Dict, List, Optional
 
-from writansub.core.types import Sub, fmt_srt_time
+from writansub.types import Sub, fmt_srt_time
 
 
 def translate_subs(

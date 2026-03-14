@@ -3,7 +3,7 @@
 import os
 import re
 
-from writansub.core.types import Sub, WordInfo, fmt_srt_time, fmt_ass_time, _ASS_REVIEW_HEADER
+from writansub.types import Sub, WordInfo, fmt_srt_time, fmt_ass_time, _ASS_REVIEW_HEADER
 
 
 def generate_review(

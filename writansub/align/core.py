@@ -3,7 +3,7 @@
 import re
 from typing import Any, Callable, List, Optional, Tuple
 
-from writansub.core.types import Sub
+from writansub.types import Sub
 
 _ROMAJI_FILTER_RE = re.compile(r'[^a-z]')
 _PUNCT_CJK_RE = re.compile(
@@ -89,7 +89,7 @@ def load_audio(path: str):
         "-f", "s16le", "-ac", "1", "-ar", str(bundle.sample_rate),
         "-loglevel", "error", "-",
     ]
-    from writansub.registry import ResourceRegistry
+    from writansub.bridge import ResourceRegistry
     proc = ResourceRegistry.instance().run_subprocess(cmd, timeout=300)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg 解码失败: {proc.stderr.decode(errors='replace')}")

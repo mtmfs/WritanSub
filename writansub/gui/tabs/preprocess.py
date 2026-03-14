@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.core.types import MEDIA_FILETYPES
+from writansub.types import MEDIA_FILETYPES
 from writansub.config import load_gui_state, save_gui_state
-from writansub.registry import ResourceRegistry
+from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox
 
 
@@ -225,7 +225,7 @@ class TigerTab(QWidget):
 
     def _run_tiger(self, media_files: list[str], do_separate: bool,
                    save_intermediate: bool, device: str):
-        from writansub.core.tiger import run_dnr_batch, run_speech_batch
+        from writansub.preprocess.core import run_dnr_batch, run_speech_batch
 
         log = self._log.log
         progress = self._progress.update_progress
@@ -273,4 +273,3 @@ class TigerTab(QWidget):
 
     def _on_finished(self):
         self._start_btn.setEnabled(True)
-

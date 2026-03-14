@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import torchaudio.transforms as T
 
-from writansub.registry import ResourceRegistry
+from writansub.bridge import ResourceRegistry
 
 
 @dataclass
