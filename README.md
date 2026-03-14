@@ -127,24 +127,34 @@ python -m writansub
 ```
 WritanSub/
 ├── writansub/
-│   ├── core/              # 核心引擎（无 GUI 依赖）
-│   │   ├── types.py       # 数据类型、常量
-│   │   ├── srt_io.py      # SRT 读写
-│   │   ├── tiger.py       # TIGER 降噪 / 说话人分轨
-│   │   ├── whisper.py     # 语音识别
-│   │   ├── alignment.py   # 强制对齐 + 后处理
-│   │   └── translate.py   # AI 翻译
-│   ├── gui/               # PySide6 界面
-│   │   ├── widgets.py     # 通用控件
-│   │   ├── pipeline_tab.py
-│   │   ├── tiger_tab.py   # 预处理（降噪/分轨）
-│   │   ├── whisper_tab.py
-│   │   ├── alignment_tab.py
-│   │   ├── translate_tab.py
-│   │   └── app.py         # 主窗口
-│   ├── config.py          # 配置管理
-│   └── pipeline.py        # 流水线编排
-├── aitrans_pp.json        # 后处理参数配置
+│   ├── types.py              # 公共数据类型、常量
+│   ├── paths.py              # 统一路径管理
+│   ├── config.py             # 配置读写
+│   ├── bridge.py             # Rust FFI 桥接层
+│   ├── preprocess/           # TIGER 音频预处理
+│   │   └── core.py
+│   ├── transcribe/           # Whisper 语音识别
+│   │   └── core.py
+│   ├── align/                # MMS_FA 强制打轴
+│   │   └── core.py
+│   ├── translate/            # AI 翻译
+│   │   └── core.py
+│   ├── subtitle/             # 字幕处理（SRT 读写、置信度审查）
+│   │   ├── srt_io.py
+│   │   └── review.py
+│   ├── pipeline/             # 流水线编排
+│   │   └── __init__.py
+│   ├── gui/                  # PySide6 界面
+│   │   ├── app.py            # 主窗口
+│   │   ├── widgets.py        # 通用控件
+│   │   └── tabs/             # 各功能页
+│   │       ├── pipeline.py
+│   │       ├── preprocess.py
+│   │       ├── transcribe.py
+│   │       ├── align.py
+│   │       └── translate.py
+│   └── vendor/tiger/         # 第三方 TIGER 模型代码
+├── native/                   # Rust 原生扩展
 ├── pyproject.toml
-└── WritanSub.bat          # Windows 启动脚本
+└── WritanSub.bat             # Windows 启动脚本
 ```
