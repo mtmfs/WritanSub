@@ -20,6 +20,46 @@ SRT_FILETYPES = [
 
 LANGUAGES = ["ja", "zh", "en", "ko", "fr", "de", "es", "ru"]
 
+WHISPER_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Whisper", [
+        ("large-v3", "~10 GB"),
+        ("large-v2", "~10 GB"),
+        ("medium", "~5 GB"),
+        ("small", "~2 GB"),
+        ("base", "~1 GB"),
+        ("tiny", "~1 GB"),
+    ]),
+    ("Distil-Whisper", [
+        ("distil-large-v3", "~6 GB"),
+    ]),
+]
+
+MSS_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("TIGER", [
+        ("tiger-dnr", "DnR ~1 GB"),
+    ]),
+    ("Demucs", [
+        ("htdemucs_ft", "Fine-tuned ~1 GB"),
+        ("htdemucs", "~1 GB"),
+    ]),
+]
+
+SS_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("TIGER", [
+        ("tiger-speech", "~1 GB"),
+    ]),
+    # TODO: TF-GridNet spatialized 模型不兼容单声道输入，需换用单声道兼容模型
+]
+
+ALIGN_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("torchaudio", [
+        ("mms_fa", "~2 GB"),
+    ]),
+    ("Qwen3-ForcedAligner", [
+        ("qwen3-fa-0.6b", "~2 GB VRAM"),
+    ]),
+]
+
 TRANSLATE_TARGETS = [
     "简体中文", "繁體中文", "English", "日本語", "한국어",
     "Français", "Deutsch", "Español", "Русский", "Tiếng Việt",

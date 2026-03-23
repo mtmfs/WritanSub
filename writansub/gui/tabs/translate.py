@@ -13,9 +13,9 @@ from PySide6.QtCore import Signal, QObject, Qt
 from writansub.types import TRANSLATE_TARGETS
 from writansub.subtitle.srt_io import parse_srt, write_srt
 from writansub.translate.core import translate_subs
-from writansub.config import load_translate_config, save_translate_config, load_gui_state, save_gui_state
+from writansub.config import load_translate_config, save_translate_config, load_gui_state
 from writansub.bridge import ResourceRegistry
-from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox
+from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, StateMixin
 
 # 状态字段 → (widget 属性, setter/getter 类型)
 _STATE_FIELDS = {
@@ -33,7 +33,7 @@ class _TranslateSignals(QObject):
     finished = Signal()
 
 
-class TranslateTab(QWidget):
+class TranslateTab(StateMixin, QWidget):
     """Tab 4: 独立 AI 翻译"""
 
     def __init__(self, parent=None):
@@ -154,11 +154,6 @@ class TranslateTab(QWidget):
         self._model_edit.editingFinished.connect(self._auto_save)
         self._base_edit.editingFinished.connect(self._auto_save)
         self._key_edit.editingFinished.connect(self._auto_save)
-
-    def _auto_save(self):
-        state = load_gui_state()
-        state.update(self.save_state())
-        save_gui_state(state)
 
     def _get_translate_config(self) -> dict:
         """当前翻译配置（用于保存和执行）"""

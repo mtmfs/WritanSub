@@ -2,15 +2,11 @@
 import gc
 import logging
 import subprocess
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable
 
 import writansub_native
 
 log = logging.getLogger(__name__)
-
-# 模型缓存键类型：(模型名, 设备) -> 原生句柄
-_ModelKey = Tuple[str, str]
-
 
 class ResourceRegistry:
     """Resource Registry (Rust Native Wrapper)
@@ -21,7 +17,7 @@ class ResourceRegistry:
     - 线程安全调度
     """
 
-    _instance: Optional["ResourceRegistry"] = None
+    _instance: "ResourceRegistry | None" = None
 
     @classmethod
     def instance(cls) -> "ResourceRegistry":
@@ -32,9 +28,9 @@ class ResourceRegistry:
     def __init__(self) -> None:
         # 使用底层原生 Registry 类（类级 API，非实例）
         self._native = writansub_native.ResourceRegistry
-        self._threads: Dict[int, Any] = {}
+        self._threads: dict[int, Any] = {}
         self._thread_counter: int = 0
-        self._model_handles: Dict[_ModelKey, int] = {}  # 缓存 (name, device) -> handle
+        self._model_handles: dict[tuple[str, str], int] = {}
 
     def register_model(self, name: str, obj: Any, device: str = "") -> int:
         handle = self._native.register_model(obj)
@@ -44,7 +40,7 @@ class ResourceRegistry:
 
     def acquire_model(self, name: str, device: str, factory: Callable[[], Any]) -> int:
         """高性能模型获取：优先从原生池复用"""
-        key: _ModelKey = (name, device)
+        key = (name, device)
         if key in self._model_handles:
             handle = self._model_handles[key]
             # 尝试在原生层获取，如果失败（可能被 unload 了），则重新加载
@@ -69,7 +65,7 @@ class ResourceRegistry:
         self._native.unload_model(handle)
         gc.collect()
 
-    def run_subprocess(self, cmd: List[str], timeout: float = 600) -> subprocess.CompletedProcess:
+    def run_subprocess(self, cmd: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
         """使用 Rust 接管子进程，提供更强的生命周期保证"""
         handle = self._native.spawn_process(cmd)
         # 简化：目前直接等待。Rust 层可以扩展非阻塞监控。

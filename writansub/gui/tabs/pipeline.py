@@ -1,7 +1,6 @@
 import os
 import sys
 import threading
-from typing import List
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
@@ -10,17 +9,17 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject
 
-from writansub.types import LANGUAGES
+from writansub.types import LANGUAGES, WHISPER_MODELS, ALIGN_MODELS, MSS_MODELS, SS_MODELS
 from writansub.subtitle.srt_io import write_srt, populate_romaji, merge_bilingual
 from writansub.transcribe.core import transcribe
 from writansub.subtitle.review import generate_review, write_review_files, mark_low_align_in_review
 from writansub.align.core import load_audio, run_alignment, post_process, init_model
 from writansub.translate.core import translate_subs
-from writansub.config import load_gui_state, save_gui_state, load_translate_config
+from writansub.config import load_gui_state, load_translate_config
 from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import (
     TextRedirector, LogWidget, ProgressWidget, build_params_grid,
-    NoScrollComboBox,
+    NoScrollComboBox, GroupedComboBox, StateMixin,
 )
 
 
@@ -32,7 +31,7 @@ class _PipelineSignals(QObject):
     progress_requested = Signal(float, str)
 
 
-class PipelineTab(QWidget):
+class PipelineTab(StateMixin, QWidget):
     """Tab 1: 核心流水线 - 纯布局调整版"""
 
     _PP_KEYS = [
@@ -46,13 +45,13 @@ class PipelineTab(QWidget):
         self._orchestrator = None
         self._running = False
         self._cancelled = False
-        self._media_files: List[str] = []
+        self._media_files: list[str] = []
 
         self._signals = _PipelineSignals()
         self._signals.finished.connect(self._on_finished)
         self._signals.enable_start.connect(self._set_buttons_state)
-        self._signals.log_requested.connect(self._log_msg)
-        self._signals.progress_requested.connect(self._update_progress)
+        self._signals.log_requested.connect(lambda msg: self._log.log(msg))
+        self._signals.progress_requested.connect(lambda pct, msg: self._progress.update_progress(pct, msg))
 
         self._setup_ui()
         self._connect_state_signals()
@@ -108,22 +107,50 @@ class PipelineTab(QWidget):
         self._lang_combo.addItems(LANGUAGES)
         self._lang_combo.setCurrentText("ja")
         basic_layout.addWidget(self._lang_combo, 0, 1)
-        basic_layout.addWidget(QLabel("推理设备:"), 1, 0)
+        basic_layout.addWidget(QLabel("听写模型:"), 1, 0)
+        self._model_combo = GroupedComboBox()
+        self._model_combo.set_grouped_items(WHISPER_MODELS)
+        self._model_combo.setCurrentName("large-v3")
+        basic_layout.addWidget(self._model_combo, 1, 1)
+        basic_layout.addWidget(QLabel("推理设备:"), 2, 0)
         self._whisper_device_combo = NoScrollComboBox()
         self._whisper_device_combo.addItems(["cuda", "cpu"])
-        basic_layout.addWidget(self._whisper_device_combo, 1, 1)
+        basic_layout.addWidget(self._whisper_device_combo, 2, 1)
+        basic_layout.addWidget(QLabel("对齐模型:"), 3, 0)
+        self._align_model_combo = GroupedComboBox()
+        self._align_model_combo.set_grouped_items(ALIGN_MODELS)
+        self._align_model_combo.setCurrentName("mms_fa")
+        basic_layout.addWidget(self._align_model_combo, 3, 1)
         self._chk_cond_prev = QCheckBox("启用前文调优")
-        basic_layout.addWidget(self._chk_cond_prev, 2, 0, 1, 2)
+        basic_layout.addWidget(self._chk_cond_prev, 4, 0, 1, 2)
         config_layout.addWidget(self.card_basic)
 
-        # TIGER 配置
-        self.card_tiger = QGroupBox("TIGER 增强")
+        # 预处理配置
+        self.card_tiger = QGroupBox("预处理增强")
         tiger_layout = QVBoxLayout(self.card_tiger)
         self._chk_tiger_denoise = QCheckBox("人声去噪 (DnR)")
         tiger_layout.addWidget(self._chk_tiger_denoise)
+
+        mss_row = QHBoxLayout()
+        mss_row.addWidget(QLabel("降噪模型:"))
+        self._mss_model_combo = GroupedComboBox()
+        self._mss_model_combo.set_grouped_items(MSS_MODELS)
+        self._mss_model_combo.setCurrentName("tiger-dnr")
+        mss_row.addWidget(self._mss_model_combo)
+        tiger_layout.addLayout(mss_row)
+
         self._chk_tiger_separate = QCheckBox("重叠分离 (Separate)")
         self._chk_tiger_separate.stateChanged.connect(self._on_tiger_separate_changed)
         tiger_layout.addWidget(self._chk_tiger_separate)
+
+        ss_row = QHBoxLayout()
+        ss_row.addWidget(QLabel("分轨模型:"))
+        self._ss_model_combo = GroupedComboBox()
+        self._ss_model_combo.set_grouped_items(SS_MODELS)
+        self._ss_model_combo.setCurrentName("tiger-speech")
+        ss_row.addWidget(self._ss_model_combo)
+        tiger_layout.addLayout(ss_row)
+
         self._chk_tiger_save = QCheckBox("保存中间音轨")
         tiger_layout.addWidget(self._chk_tiger_save)
         tiger_layout.addStretch()
@@ -189,32 +216,35 @@ class PipelineTab(QWidget):
 
     def _connect_state_signals(self):
         self._lang_combo.currentTextChanged.connect(self._auto_save)
+        self._model_combo.currentTextChanged.connect(self._auto_save)
         self._whisper_device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
+        self._align_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_whisper.stateChanged.connect(self._auto_save)
         self._chk_force_align.stateChanged.connect(self._auto_save)
         self._chk_review.stateChanged.connect(self._auto_save)
         self._chk_translate.stateChanged.connect(self._auto_save)
         self._chk_tiger_denoise.stateChanged.connect(self._auto_save)
+        self._mss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_tiger_separate.stateChanged.connect(self._auto_save)
+        self._ss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_tiger_save.stateChanged.connect(self._auto_save)
-
-    def _auto_save(self):
-        state = load_gui_state()
-        state.update(self.save_state())
-        save_gui_state(state)
 
     def save_state(self) -> dict:
         return {
             "pipeline.lang": self._lang_combo.currentText(),
+            "pipeline.whisper_model": self._model_combo.currentName(),
             "pipeline.whisper_device": self._whisper_device_combo.currentText(),
             "pipeline.cond_prev": self._chk_cond_prev.isChecked(),
+            "pipeline.align_model": self._align_model_combo.currentName(),
             "pipeline.retain_whisper": self._chk_whisper.isChecked(),
             "pipeline.retain_align": self._chk_force_align.isChecked(),
             "pipeline.retain_review": self._chk_review.isChecked(),
             "pipeline.enable_translate": self._chk_translate.isChecked(),
             "pipeline.tiger_denoise": self._chk_tiger_denoise.isChecked(),
+            "pipeline.mss_model": self._mss_model_combo.currentName(),
             "pipeline.tiger_separate": self._chk_tiger_separate.isChecked(),
+            "pipeline.ss_model": self._ss_model_combo.currentName(),
             "pipeline.tiger_save": self._chk_tiger_save.isChecked(),
             "pipeline.media_files": list(self._media_files),
         }
@@ -222,10 +252,14 @@ class PipelineTab(QWidget):
     def restore_state(self, state: dict):
         if "pipeline.lang" in state:
             self._lang_combo.setCurrentText(state["pipeline.lang"])
+        if "pipeline.whisper_model" in state:
+            self._model_combo.setCurrentName(state["pipeline.whisper_model"])
         if "pipeline.whisper_device" in state:
             self._whisper_device_combo.setCurrentText(state["pipeline.whisper_device"])
         if "pipeline.cond_prev" in state:
             self._chk_cond_prev.setChecked(state["pipeline.cond_prev"])
+        if "pipeline.align_model" in state:
+            self._align_model_combo.setCurrentName(state["pipeline.align_model"])
         if "pipeline.retain_whisper" in state:
             self._chk_whisper.setChecked(state["pipeline.retain_whisper"])
         if "pipeline.retain_align" in state:
@@ -236,8 +270,12 @@ class PipelineTab(QWidget):
             self._chk_translate.setChecked(state["pipeline.enable_translate"])
         if "pipeline.tiger_denoise" in state:
             self._chk_tiger_denoise.setChecked(state["pipeline.tiger_denoise"])
+        if "pipeline.mss_model" in state:
+            self._mss_model_combo.setCurrentName(state["pipeline.mss_model"])
         if "pipeline.tiger_separate" in state:
             self._chk_tiger_separate.setChecked(state["pipeline.tiger_separate"])
+        if "pipeline.ss_model" in state:
+            self._ss_model_combo.setCurrentName(state["pipeline.ss_model"])
         if "pipeline.tiger_save" in state:
             self._chk_tiger_save.setChecked(state["pipeline.tiger_save"])
         if "pipeline.media_files" in state:
@@ -285,12 +323,6 @@ class PipelineTab(QWidget):
         self._log.setVisible(not visible)
         self._btn_toggle_log.setText("▼ 隐藏日志" if not visible else "▶ 查看日志")
 
-    def _log_msg(self, msg: str):
-        self._log.log(msg)
-
-    def _update_progress(self, pct: float, msg: str):
-        self._progress.update_progress(pct, msg)
-
     def _set_buttons_state(self, running: bool):
         self._start_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
@@ -324,6 +356,8 @@ class PipelineTab(QWidget):
         self._progress.reset()
 
         device = self._whisper_device_combo.currentText()
+        model_size = self._model_combo.currentName()
+        align_model = self._align_model_combo.currentName()
         enable_translate = self._chk_translate.isChecked()
 
         thread = threading.Thread(
@@ -332,6 +366,8 @@ class PipelineTab(QWidget):
                 list(self._media_files),
                 self._lang_combo.currentText(),
                 device,
+                model_size,
+                align_model,
                 {
                     "whisper": self._chk_whisper.isChecked(),
                     "force_align": self._chk_force_align.isChecked(),
@@ -341,6 +377,8 @@ class PipelineTab(QWidget):
                 self._chk_cond_prev.isChecked(),
                 load_translate_config() if enable_translate else None,
                 self._resolve_tiger_mode(),
+                self._mss_model_combo.currentName(),
+                self._ss_model_combo.currentName(),
                 self._chk_tiger_save.isChecked(),
             ),
             daemon=True,
@@ -351,8 +389,9 @@ class PipelineTab(QWidget):
 
     # ── 流水线执行 (后台线程) ──
 
-    def _run_pipeline(self, media_files, lang, device, retention, pp,
-                      cond_prev, translate_cfg, tiger_mode, tiger_save):
+    def _run_pipeline(self, media_files, lang, device, model_size, align_model,
+                      retention, pp, cond_prev, translate_cfg, tiger_mode,
+                      mss_model, ss_model, tiger_save):
         import torch
 
         redirector = TextRedirector(self._log)
@@ -375,8 +414,8 @@ class PipelineTab(QWidget):
             # Phase: TIGER 增强
             if tiger_mode and not self._cancelled:
                 tiger_results = self._run_tiger_phase(
-                    media_files, tiger_mode, tiger_save, device,
-                    num_phases, log_emit, prog_emit,
+                    media_files, tiger_mode, tiger_save, mss_model, ss_model,
+                    device, num_phases, log_emit, prog_emit,
                 )
 
             # Phase: Whisper 转录
@@ -385,10 +424,10 @@ class PipelineTab(QWidget):
 
             def _w_factory():
                 return __import__("faster_whisper").WhisperModel(
-                    "large-v3", device=device, compute_type="int8",
+                    model_size, device=device, compute_type="int8",
                 )
 
-            wh = reg.acquire_model("whisper", device, _w_factory)
+            wh = reg.acquire_model(f"whisper:{model_size}", device, _w_factory)
             whisper_model = reg.get_model(wh)
 
             for idx, media in enumerate(media_files, 1):
@@ -418,13 +457,21 @@ class PipelineTab(QWidget):
 
             reg.release_model(wh)
 
-            # Phase: MMS 对齐
+            # Phase: 对齐
             a_phase = 2 + phase_offset
             aligned_results = {}
             if sub_results and not self._cancelled:
-                log_emit(f">>> Phase {a_phase}/{num_phases}: MMS 对齐")
-                mh = reg.acquire_model("mms_fa", device, lambda: init_model(device))
-                mms_bundle = reg.get_model(mh)
+                use_qwen3 = (align_model == "qwen3-fa-0.6b")
+                label = "Qwen3 对齐" if use_qwen3 else "MMS 对齐"
+                log_emit(f">>> Phase {a_phase}/{num_phases}: {label}")
+
+                if use_qwen3:
+                    from writansub.align.core import init_qwen3_model, run_qwen3_alignment
+                    mh = reg.acquire_model("qwen3_fa", device, lambda: init_qwen3_model(device))
+                    qwen3_model = reg.get_model(mh)
+                else:
+                    mh = reg.acquire_model("mms_fa", device, lambda: init_model(device))
+                    mms_bundle = reg.get_model(mh)
 
                 for idx, media in enumerate(media_files, 1):
                     if self._cancelled or media not in sub_results:
@@ -437,11 +484,20 @@ class PipelineTab(QWidget):
                         )
 
                     waveform = load_audio(media)
-                    populate_romaji(sub_results[media], lang)
-                    aligned = run_alignment(
-                        waveform, sub_results[media],
-                        device=device, progress_callback=_a_p, model_bundle=mms_bundle,
-                    )
+
+                    if use_qwen3:
+                        aligned = run_qwen3_alignment(
+                            waveform, sub_results[media],
+                            device=device, progress_callback=_a_p,
+                            model=qwen3_model, lang=lang,
+                        )
+                    else:
+                        populate_romaji(sub_results[media], lang)
+                        aligned = run_alignment(
+                            waveform, sub_results[media],
+                            device=device, progress_callback=_a_p, model_bundle=mms_bundle,
+                        )
+
                     final = post_process(aligned, **pp)
                     aligned_results[media] = final
 
@@ -491,8 +547,8 @@ class PipelineTab(QWidget):
             reg.unregister_thread(self._thread_handle)
             self._signals.finished.emit()
 
-    def _run_tiger_phase(self, media_files, tiger_mode, tiger_save, device,
-                         num_phases, log_emit, prog_emit) -> dict:
+    def _run_tiger_phase(self, media_files, tiger_mode, tiger_save, mss_model,
+                         ss_model, device, num_phases, log_emit, prog_emit) -> dict:
         """执行 TIGER 增强阶段，返回 tiger_results"""
         log_emit(f">>> Phase 1/{num_phases}: TIGER 增强")
         from writansub.preprocess.core import run_dnr_batch, run_speech_batch
@@ -505,6 +561,7 @@ class PipelineTab(QWidget):
 
         tiger_results = run_dnr_batch(
             media_files, device=device, save_intermediate=tiger_save,
+            mss_model=mss_model,
             log_callback=log_emit, progress_callback=_dnr_p,
         )
 
@@ -514,6 +571,7 @@ class PipelineTab(QWidget):
 
             run_speech_batch(
                 tiger_results, device=device, save_intermediate=tiger_save,
+                ss_model=ss_model,
                 log_callback=log_emit, progress_callback=_spk_p,
             )
 

@@ -10,13 +10,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES
+from writansub.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES, WHISPER_MODELS
 from writansub.transcribe.core import transcribe
 from writansub.subtitle.review import generate_review, write_review_files
 from writansub.subtitle.srt_io import write_srt
-from writansub.config import PARAM_DEFS, load_gui_state, save_gui_state
+from writansub.config import PARAM_DEFS, load_gui_state
 from writansub.bridge import ResourceRegistry
-from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, ParamSpinBox
+from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin
 
 
 class _WhisperSignals(QObject):
@@ -24,7 +24,7 @@ class _WhisperSignals(QObject):
     finished = Signal()
 
 
-class WhisperTab(QWidget):
+class WhisperTab(StateMixin, QWidget):
     """Tab 2: 独立 Whisper 语音识别"""
 
     def __init__(self, parent=None):
@@ -85,6 +85,12 @@ class WhisperTab(QWidget):
         self._lang_combo.addItems(LANGUAGES)
         self._lang_combo.setCurrentText("ja")
         param_layout.addWidget(self._lang_combo)
+
+        param_layout.addWidget(QLabel("听写模型"))
+        self._model_combo = GroupedComboBox()
+        self._model_combo.set_grouped_items(WHISPER_MODELS)
+        self._model_combo.setCurrentName("large-v3")
+        param_layout.addWidget(self._model_combo)
 
         param_layout.addWidget(QLabel("设备"))
         self._device_combo = NoScrollComboBox()
@@ -148,19 +154,16 @@ class WhisperTab(QWidget):
         self._media_edit.editingFinished.connect(self._auto_save)
         self._output_edit.editingFinished.connect(self._auto_save)
         self._lang_combo.currentTextChanged.connect(self._auto_save)
+        self._model_combo.currentTextChanged.connect(self._auto_save)
         self._device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
-
-    def _auto_save(self):
-        state = load_gui_state()
-        state.update(self.save_state())
-        save_gui_state(state)
 
     def save_state(self) -> dict:
         return {
             "whisper.media": self._media_edit.text(),
             "whisper.output": self._output_edit.text(),
             "whisper.lang": self._lang_combo.currentText(),
+            "whisper.model": self._model_combo.currentName(),
             "whisper.device": self._device_combo.currentText(),
             "whisper.cond_prev": self._chk_cond_prev.isChecked(),
         }
@@ -172,6 +175,8 @@ class WhisperTab(QWidget):
             self._output_edit.setText(state["whisper.output"])
         if "whisper.lang" in state:
             self._lang_combo.setCurrentText(state["whisper.lang"])
+        if "whisper.model" in state:
+            self._model_combo.setCurrentName(state["whisper.model"])
         if "whisper.device" in state:
             self._device_combo.setCurrentText(state["whisper.device"])
         if "whisper.cond_prev" in state:
@@ -194,19 +199,13 @@ class WhisperTab(QWidget):
         if media and not self._output_edit.text().strip():
             self._output_edit.setText(os.path.splitext(media)[0] + ".srt")
 
-    def _log_msg(self, msg: str):
-        self._log.log(msg)
-
-    def _update_progress(self, pct: float, msg: str):
-        self._progress.update_progress(pct, msg)
-
     def _on_finished(self):
         self._start_btn.setEnabled(True)
 
     def _start(self):
         media = self._media_edit.text().strip()
         if not media or not os.path.isfile(media):
-            self._log_msg("请先选择有效的媒体文件")
+            self._log.log("请先选择有效的媒体文件")
             return
 
         output = self._output_edit.text().strip()
@@ -219,13 +218,14 @@ class WhisperTab(QWidget):
         self._progress.reset()
 
         lang = self._lang_combo.currentText()
+        model_size = self._model_combo.currentName()
         device = self._device_combo.currentText()
         wc = self._wc_spin.value()
         cond_prev = self._chk_cond_prev.isChecked()
 
         thread = threading.Thread(
             target=self._run_whisper,
-            args=(media, output, lang, device, wc, cond_prev),
+            args=(media, output, lang, model_size, device, wc, cond_prev),
             daemon=True,
         )
         reg = ResourceRegistry.instance()
@@ -233,13 +233,13 @@ class WhisperTab(QWidget):
         thread.start()
 
     def _run_whisper(self, media: str, output: str, lang: str,
-                     device: str, wc_threshold: float,
+                     model_size: str, device: str, wc_threshold: float,
                      cond_prev: bool = True):
         try:
             subs, word_data = transcribe(
-                media, lang=lang, device=device, log_callback=self._log_msg,
-                progress_callback=self._update_progress,
-                condition_on_previous_text=cond_prev,
+                media, lang=lang, device=device, log_callback=self._log.log,
+                progress_callback=self._progress.update_progress,
+                condition_on_previous_text=cond_prev, model_size=model_size,
             )
 
             # 生成 review 文件
@@ -250,13 +250,13 @@ class WhisperTab(QWidget):
                 if low_count > 0:
                     base = os.path.splitext(media)[0]
                     write_review_files(base, srt_content, ass_content)
-                    self._log_msg(f"低置信词 {low_count}/{total_words}，已生成标记版")
+                    self._log.log(f"低置信词 {low_count}/{total_words}，已生成标记版")
 
             # 直接写到用户指定路径
             write_srt(subs, output)
-            self._update_progress(1.0, "识别完成")
+            self._progress.update_progress(1.0, "识别完成")
         except Exception as e:
-            self._log_msg(f"出错: {e}")
+            self._log.log(f"出错: {e}")
         finally:
             ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()

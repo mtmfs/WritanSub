@@ -16,6 +16,10 @@ dependencies = [
     "korean-romanizer",
     "PySide6>=6.5.0",
     "imageio-ffmpeg",
+    "qwen-asr",
+    "demucs",
+    "espnet",
+    "espnet-model-zoo",
     "maturin>=1.4.0",
     "writansub_native",
 ]

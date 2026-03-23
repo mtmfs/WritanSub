@@ -5,14 +5,30 @@ import io
 from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
     QHBoxLayout, QDoubleSpinBox, QGridLayout, QFrame,
-    QScrollArea, QComboBox,
+    QScrollArea, QComboBox, QStyledItemDelegate,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 
 from writansub.config import (
     PP_DEFAULTS, PARAM_DEFS,
     load_pp_config, save_pp_config,
+    load_gui_state, save_gui_state,
 )
+
+
+# ── State persistence mixin ───────────────────────────────────────────
+
+
+class StateMixin:
+    """Mixin: provides _auto_save() that persists save_state() to gui_state.json.
+
+    Subclass must implement save_state() -> dict and restore_state(dict).
+    """
+
+    def _auto_save(self):
+        state = load_gui_state()
+        state.update(self.save_state())
+        save_gui_state(state)
 
 
 # ── Wheel-scroll guard mixin ──────────────────────────────────────────
@@ -151,6 +167,54 @@ class ScrollableFrame(QScrollArea):
 
 class NoScrollComboBox(_NoScrollMixin, QComboBox):
     """ComboBox that ignores wheel events unless focused."""
+
+
+class _InfoDelegate(QStyledItemDelegate):
+    """下拉项代理：基类正常绘制，仅在右侧追加附加信息。"""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        info = index.data(Qt.UserRole + 1)
+        if not info:
+            return
+        painter.save()
+        rect = option.rect.adjusted(0, 0, -8, 0)
+        painter.setPen(option.palette.color(option.palette.Text))
+        painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, info)
+        painter.restore()
+
+
+class GroupedComboBox(NoScrollComboBox):
+    """带分组标题的 ComboBox。
+
+    调用 set_grouped_items(groups) 填充，
+    groups 为 [(系列名, [(模型名, 附加信息), ...])] 列表。
+    分组标题不可选，仅作为视觉分隔。
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setItemDelegate(_InfoDelegate(self))
+
+    def set_grouped_items(self, groups: list[tuple[str, list[tuple[str, str]]]]) -> None:
+        self.clear()
+        model = self.model()
+        for series, items in groups:
+            self.addItem(f"── {series} ──")
+            model.item(self.count() - 1).setEnabled(False)
+            for name, info in items:
+                self.addItem(name)
+                self.setItemData(self.count() - 1, name, Qt.UserRole)
+                self.setItemData(self.count() - 1, info, Qt.UserRole + 1)
+
+    def currentName(self) -> str:
+        return self.currentData(Qt.UserRole) or ""
+
+    def setCurrentName(self, name: str) -> None:
+        for i in range(self.count()):
+            if self.itemData(i, Qt.UserRole) == name:
+                self.setCurrentIndex(i)
+                return
 
 
 class NoScrollSpinBox(_NoScrollMixin, QDoubleSpinBox):

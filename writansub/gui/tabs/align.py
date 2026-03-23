@@ -9,12 +9,18 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.types import LANGUAGES
+from writansub.types import LANGUAGES, ALIGN_MODELS
 from writansub.subtitle.srt_io import parse_srt, write_srt
-from writansub.align.core import load_audio, run_alignment, post_process, init_model
-from writansub.config import load_gui_state, save_gui_state
+from writansub.align.core import (
+    load_audio, run_alignment, post_process, init_model,
+    init_qwen3_model, run_qwen3_alignment,
+)
+from writansub.config import load_gui_state
 from writansub.bridge import ResourceRegistry
-from writansub.gui.widgets import TextRedirector, LogWidget, ProgressWidget, build_params_grid, NoScrollComboBox
+from writansub.gui.widgets import (
+    TextRedirector, LogWidget, ProgressWidget, build_params_grid,
+    NoScrollComboBox, GroupedComboBox, StateMixin,
+)
 
 
 class _AlignSignals(QObject):
@@ -22,7 +28,7 @@ class _AlignSignals(QObject):
     finished = Signal()
 
 
-class AlignmentTab(QWidget):
+class AlignmentTab(StateMixin, QWidget):
     """Tab 3: 独立 MMS_FA 强制打轴"""
 
     _PP_KEYS = [
@@ -98,6 +104,12 @@ class AlignmentTab(QWidget):
         self._lang_combo.setCurrentText("ja")
         basic_row.addWidget(self._lang_combo)
 
+        basic_row.addWidget(QLabel("对齐模型"))
+        self._align_model_combo = GroupedComboBox()
+        self._align_model_combo.set_grouped_items(ALIGN_MODELS)
+        self._align_model_combo.setCurrentName("mms_fa")
+        basic_row.addWidget(self._align_model_combo)
+
         basic_row.addWidget(QLabel("设备"))
         self._device_combo = NoScrollComboBox()
         self._device_combo.addItems(["cuda", "cpu"])
@@ -144,12 +156,8 @@ class AlignmentTab(QWidget):
         self._srt_edit.editingFinished.connect(self._auto_save)
         self._out_edit.editingFinished.connect(self._auto_save)
         self._lang_combo.currentTextChanged.connect(self._auto_save)
+        self._align_model_combo.currentTextChanged.connect(self._auto_save)
         self._device_combo.currentTextChanged.connect(self._auto_save)
-
-    def _auto_save(self):
-        state = load_gui_state()
-        state.update(self.save_state())
-        save_gui_state(state)
 
     def save_state(self) -> dict:
         return {
@@ -157,6 +165,7 @@ class AlignmentTab(QWidget):
             "alignment.srt": self._srt_edit.text(),
             "alignment.output": self._out_edit.text(),
             "alignment.lang": self._lang_combo.currentText(),
+            "alignment.model": self._align_model_combo.currentName(),
             "alignment.device": self._device_combo.currentText(),
         }
 
@@ -169,6 +178,8 @@ class AlignmentTab(QWidget):
             self._out_edit.setText(state["alignment.output"])
         if "alignment.lang" in state:
             self._lang_combo.setCurrentText(state["alignment.lang"])
+        if "alignment.model" in state:
+            self._align_model_combo.setCurrentName(state["alignment.model"])
         if "alignment.device" in state:
             self._device_combo.setCurrentText(state["alignment.device"])
 
@@ -198,12 +209,6 @@ class AlignmentTab(QWidget):
             base = srt.rsplit(".", 1)[0]
             self._out_edit.setText(f"{base}_aligned.srt")
 
-    def _log_msg(self, msg: str):
-        self._log.log(msg)
-
-    def _update_progress(self, pct: float, msg: str):
-        self._progress.update_progress(pct, msg)
-
     def _on_finished(self):
         self._start_btn.setEnabled(True)
 
@@ -213,10 +218,10 @@ class AlignmentTab(QWidget):
         output = self._out_edit.text().strip()
 
         if not audio:
-            self._log_msg("请选择音频文件")
+            self._log.log("请选择音频文件")
             return
         if not srt:
-            self._log_msg("请选择字幕文件")
+            self._log.log("请选择字幕文件")
             return
         if not output:
             base = srt.rsplit(".", 1)[0]
@@ -229,11 +234,12 @@ class AlignmentTab(QWidget):
 
         pp = {k: v.value() for k, v in self._pp_vars.items()}
         lang = self._lang_combo.currentText()
+        align_model = self._align_model_combo.currentName()
         device = self._device_combo.currentText()
 
         thread = threading.Thread(
             target=self._run_alignment,
-            args=(audio, srt, output, device, pp, lang),
+            args=(audio, srt, output, device, pp, lang, align_model),
             daemon=True,
         )
         reg = ResourceRegistry.instance()
@@ -242,7 +248,7 @@ class AlignmentTab(QWidget):
 
     def _run_alignment(self, audio: str, srt: str, output: str,
                        device: str, pp: dict[str, float],
-                       lang: str = "ja"):
+                       lang: str = "ja", align_model: str = "mms_fa"):
         import torch
 
         redirector = TextRedirector(self._log)
@@ -253,35 +259,46 @@ class AlignmentTab(QWidget):
         model_handle = None
         try:
             if device == "cuda" and not torch.cuda.is_available():
-                self._log_msg("CUDA 不可用，回退到 CPU")
+                self._log.log("CUDA 不可用，回退到 CPU")
                 device = "cpu"
 
-            self._update_progress(0.0, "加载音频...")
+            self._progress.update_progress(0.0, "加载音频...")
             waveform = load_audio(audio)
 
-            self._update_progress(0.05, "解析字幕...")
+            self._progress.update_progress(0.05, "解析字幕...")
             subs = parse_srt(srt, lang=lang)
-            self._log_msg(f"字幕条数: {len(subs)}")
+            self._log.log(f"字幕条数: {len(subs)}")
 
-            self._update_progress(0.1, "加载模型...")
-            model_bundle = init_model(device)
-            model_handle = reg.register_model("mms_fa", model_bundle, device)
+            self._progress.update_progress(0.1, "加载模型...")
 
-            aligned = run_alignment(
-                waveform, subs, device=device,
-                progress_callback=lambda p, m: self._update_progress(0.1 + p * 0.85, m),
-                model_bundle=model_bundle,
-            )
+            if align_model == "qwen3-fa-0.6b":
+                qwen3_model = init_qwen3_model(device)
+                model_handle = reg.register_model("qwen3_fa", qwen3_model, device)
 
-            self._update_progress(0.95, "后处理...")
+                aligned = run_qwen3_alignment(
+                    waveform, subs, device=device,
+                    progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
+                    model=qwen3_model, lang=lang,
+                )
+            else:
+                model_bundle = init_model(device)
+                model_handle = reg.register_model("mms_fa", model_bundle, device)
+
+                aligned = run_alignment(
+                    waveform, subs, device=device,
+                    progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
+                    model_bundle=model_bundle,
+                )
+
+            self._progress.update_progress(0.95, "后处理...")
             pp.pop("align_conf_threshold", None)
             final = post_process(aligned, **pp)
 
             write_srt(final, output)
-            self._update_progress(1.0, "对齐完成")
-            self._log_msg(f"完成! 输出: {output}")
+            self._progress.update_progress(1.0, "对齐完成")
+            self._log.log(f"完成! 输出: {output}")
         except Exception as e:
-            self._log_msg(f"出错: {e}")
+            self._log.log(f"出错: {e}")
         finally:
             if model_handle is not None:
                 reg.unload_model(model_handle)

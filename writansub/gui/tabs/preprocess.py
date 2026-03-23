@@ -10,10 +10,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.types import MEDIA_FILETYPES
-from writansub.config import load_gui_state, save_gui_state
+from writansub.types import MEDIA_FILETYPES, MSS_MODELS, SS_MODELS
+from writansub.config import load_gui_state
 from writansub.bridge import ResourceRegistry
-from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox
+from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, StateMixin
 
 
 class _TigerSignals(QObject):
@@ -21,7 +21,7 @@ class _TigerSignals(QObject):
     finished = Signal()
 
 
-class TigerTab(QWidget):
+class TigerTab(StateMixin, QWidget):
     """Tab 2: TIGER 音频预处理（降噪 / 说话人分轨）"""
 
     def __init__(self, parent=None):
@@ -77,9 +77,15 @@ class TigerTab(QWidget):
         self._chk_denoise = QCheckBox("降噪")
         self._chk_denoise.setChecked(True)
         self._chk_denoise.setToolTip(
-            "DnR 分离出纯对话轨（去除音效和音乐）"
+            "分离出纯对话轨（去除音效和音乐）"
         )
         tiger_layout.addWidget(self._chk_denoise)
+
+        tiger_layout.addWidget(QLabel("降噪模型"))
+        self._mss_model_combo = GroupedComboBox()
+        self._mss_model_combo.set_grouped_items(MSS_MODELS)
+        self._mss_model_combo.setCurrentName("tiger-dnr")
+        tiger_layout.addWidget(self._mss_model_combo)
 
         self._chk_separate = QCheckBox("对话分轨")
         self._chk_separate.setToolTip(
@@ -88,6 +94,12 @@ class TigerTab(QWidget):
         )
         self._chk_separate.stateChanged.connect(self._on_separate_changed)
         tiger_layout.addWidget(self._chk_separate)
+
+        tiger_layout.addWidget(QLabel("分轨模型"))
+        self._ss_model_combo = GroupedComboBox()
+        self._ss_model_combo.set_grouped_items(SS_MODELS)
+        self._ss_model_combo.setCurrentName("tiger-speech")
+        tiger_layout.addWidget(self._ss_model_combo)
 
         tiger_layout.addWidget(QLabel("设备"))
         self._device_combo = NoScrollComboBox()
@@ -133,19 +145,18 @@ class TigerTab(QWidget):
 
     def _connect_state_signals(self):
         self._chk_denoise.stateChanged.connect(self._auto_save)
+        self._mss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_separate.stateChanged.connect(self._auto_save)
+        self._ss_model_combo.currentTextChanged.connect(self._auto_save)
         self._device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_save.stateChanged.connect(self._auto_save)
-
-    def _auto_save(self):
-        state = load_gui_state()
-        state.update(self.save_state())
-        save_gui_state(state)
 
     def save_state(self) -> dict:
         return {
             "tiger.denoise": self._chk_denoise.isChecked(),
+            "tiger.mss_model": self._mss_model_combo.currentName(),
             "tiger.separate": self._chk_separate.isChecked(),
+            "tiger.ss_model": self._ss_model_combo.currentName(),
             "tiger.device": self._device_combo.currentText(),
             "tiger.save": self._chk_save.isChecked(),
             "tiger.files": list(self._media_files),
@@ -154,8 +165,12 @@ class TigerTab(QWidget):
     def restore_state(self, state: dict):
         if "tiger.denoise" in state:
             self._chk_denoise.setChecked(state["tiger.denoise"])
+        if "tiger.mss_model" in state:
+            self._mss_model_combo.setCurrentName(state["tiger.mss_model"])
         if "tiger.separate" in state:
             self._chk_separate.setChecked(state["tiger.separate"])
+        if "tiger.ss_model" in state:
+            self._ss_model_combo.setCurrentName(state["tiger.ss_model"])
         if "tiger.device" in state:
             self._device_combo.setCurrentText(state["tiger.device"])
         if "tiger.save" in state:
@@ -210,21 +225,23 @@ class TigerTab(QWidget):
         self._progress.reset()
         self._log.clear_log()
 
+        mss_model = self._mss_model_combo.currentName()
         do_separate = self._chk_separate.isChecked()
+        ss_model = self._ss_model_combo.currentName()
         save_intermediate = self._chk_save.isChecked()
         device = self._device_combo.currentText()
 
         thread = threading.Thread(
             target=self._run_tiger,
-            args=(list(self._media_files), do_separate, save_intermediate, device),
+            args=(list(self._media_files), mss_model, do_separate, ss_model, save_intermediate, device),
             daemon=True,
         )
         reg = ResourceRegistry.instance()
         self._thread_handle = reg.register_thread(thread)
         thread.start()
 
-    def _run_tiger(self, media_files: list[str], do_separate: bool,
-                   save_intermediate: bool, device: str):
+    def _run_tiger(self, media_files: list[str], mss_model: str, do_separate: bool,
+                   ss_model: str, save_intermediate: bool, device: str):
         from writansub.preprocess.core import run_dnr_batch, run_speech_batch
 
         log = self._log.log
@@ -243,6 +260,7 @@ class TigerTab(QWidget):
                 media_files,
                 device=device,
                 save_intermediate=save_intermediate,
+                mss_model=mss_model,
                 log_callback=log,
                 progress_callback=_dnr_progress,
             )
@@ -258,6 +276,7 @@ class TigerTab(QWidget):
                     tiger_results,
                     device=device,
                     save_intermediate=save_intermediate,
+                    ss_model=ss_model,
                     log_callback=log,
                     progress_callback=_spk_progress,
                 )

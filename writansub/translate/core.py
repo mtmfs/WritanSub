@@ -1,23 +1,22 @@
 """AI 翻译：调用 OpenAI 兼容 API 翻译字幕"""
 
-import os
 import re
-from typing import Callable, Dict, List, Optional
+from typing import Callable
 
-from writansub.types import Sub, fmt_srt_time
+from writansub.types import Sub
 
 
 def translate_subs(
-    subs: List[Sub],
+    subs: list[Sub],
     target_lang: str,
     api_base: str,
     api_key: str,
     model: str,
     batch_size: int = 20,
-    log_callback: Optional[Callable[[str], None]] = None,
-    progress_callback: Optional[Callable[[float, str], None]] = None,
-    cancelled: Optional[Callable[[], bool]] = None,
-) -> List[Sub]:
+    log_callback: Callable[[str], None] | None = None,
+    progress_callback: Callable[[float, str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[Sub]:
     """
     使用 OpenAI 兼容 API 翻译字幕列表（内存操作）。
 
@@ -39,19 +38,15 @@ def translate_subs(
     """
     from openai import OpenAI
 
-    def _log(msg: str):
-        if log_callback:
-            log_callback(msg)
-
-    def _cancelled() -> bool:
-        return cancelled() if cancelled else False
+    _log = log_callback or (lambda msg: None)
+    _cancelled = cancelled or (lambda: False)
 
     client = OpenAI(base_url=api_base, api_key=api_key)
     total = len(subs)
 
     _log(f"共 {total} 条字幕")
 
-    translated: Dict[int, str] = {}
+    translated: dict[int, str] = {}
 
     for batch_start in range(0, total, batch_size):
         if _cancelled():
@@ -110,54 +105,3 @@ def translate_subs(
     return subs
 
 
-def translate_srt(
-    srt_path: str,
-    target_lang: str,
-    api_base: str,
-    api_key: str,
-    model: str,
-    batch_size: int = 20,
-    log_callback: Optional[Callable[[str], None]] = None,
-    progress_callback: Optional[Callable[[float, str], None]] = None,
-    cancelled: Optional[Callable[[], bool]] = None,
-) -> str:
-    """
-    兼容 wrapper：从 SRT 文件读取、翻译、写回磁盘。
-
-    Returns:
-        翻译后的 SRT 文件路径
-    """
-    import pysrt
-
-    srt_subs = pysrt.open(srt_path, encoding="utf-8")
-    subs = [
-        Sub(
-            index=s.index,
-            start=s.start.ordinal / 1000.0,
-            end=s.end.ordinal / 1000.0,
-            text=s.text.replace("\n", " ").strip(),
-        )
-        for s in srt_subs
-    ]
-
-    translate_subs(
-        subs,
-        target_lang=target_lang,
-        api_base=api_base,
-        api_key=api_key,
-        model=model,
-        batch_size=batch_size,
-        log_callback=log_callback,
-        progress_callback=progress_callback,
-        cancelled=cancelled,
-    )
-
-    output_path = os.path.splitext(srt_path)[0] + "_translated.srt"
-    with open(output_path, "w", encoding="utf-8") as f:
-        for s in subs:
-            text = s.translated if s.translated else s.text
-            f.write(f"{s.index}\n")
-            f.write(f"{fmt_srt_time(s.start)} --> {fmt_srt_time(s.end)}\n")
-            f.write(f"{text}\n\n")
-
-    return output_path

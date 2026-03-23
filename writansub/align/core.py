@@ -1,7 +1,7 @@
-"""强制对齐：罗马音转换、音频加载、MMS_FA 对齐、后处理"""
+"""强制对齐：罗马音转换、音频加载、MMS_FA / Qwen3 对齐、后处理"""
 
 import re
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable
 
 from writansub.types import Sub
 
@@ -18,7 +18,7 @@ _PUNCT_LATIN_RE = re.compile(
     r'─―—\-,.:;!?\'"'
     r'0-9０-９\s]'
 )
-_katsu: Optional[Any] = None
+_katsu: Any | None = None
 
 
 def _get_katsu() -> Any:
@@ -72,34 +72,14 @@ def text_to_romaji(text: str, lang: str) -> str:
 
 
 def load_audio(path: str):
-    """加载音频，重采样到 16kHz，返回单声道 [1, T] Tensor。
-    使用 ffmpeg 解码，支持 MP4/MKV/MP3 等任意格式。"""
-    import shutil
-    import numpy as np
-    import torch
+    """加载音频，重采样到 16kHz，返回单声道 [1, T] Tensor。"""
     from torchaudio.pipelines import MMS_FA as bundle
-
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        from imageio_ffmpeg import get_ffmpeg_exe
-        ffmpeg = get_ffmpeg_exe()
-
-    cmd = [
-        ffmpeg, "-i", path,
-        "-f", "s16le", "-ac", "1", "-ar", str(bundle.sample_rate),
-        "-loglevel", "error", "-",
-    ]
-    from writansub.bridge import ResourceRegistry
-    proc = ResourceRegistry.instance().run_subprocess(cmd, timeout=300)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg 解码失败: {proc.stderr.decode(errors='replace')}")
-
-    data = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
-    waveform = torch.from_numpy(data).unsqueeze(0)
+    from writansub.preprocess.core import load_audio_for_tiger
+    waveform, _ = load_audio_for_tiger(path, target_sr=bundle.sample_rate)
     return waveform
 
 
-def init_model(device: str) -> Tuple:
+def init_model(device: str) -> tuple:
     """初始化 MMS_FA 模型、tokenizer、aligner。"""
     from torchaudio.pipelines import MMS_FA as bundle
     model = bundle.get_model().to(device)
@@ -115,7 +95,7 @@ def align_segment(
     tokenizer,
     aligner,
     device: str,
-) -> Optional[Tuple[float, float, float]]:
+) -> tuple[float, float, float] | None:
     """
     对单个音频片段做 forced alignment。
     返回: (start_sec, end_sec, avg_score) 相对于 chunk 起点，或 None。
@@ -149,12 +129,12 @@ def align_segment(
 
 def run_alignment(
     waveform,
-    subs: List[Sub],
+    subs: list[Sub],
     device: str = "cuda",
     pad_sec: float = 0.5,
-    progress_callback: Optional[Callable[[float, str], None]] = None,
-    model_bundle: Optional[Tuple] = None,
-) -> List[Sub]:
+    progress_callback: Callable[[float, str], None] | None = None,
+    model_bundle: tuple | None = None,
+) -> list[Sub]:
     """
     对所有字幕段执行 forced alignment。
 
@@ -222,14 +202,131 @@ def run_alignment(
     return results
 
 
+# ── Qwen3-ForcedAligner ──────────────────────────────────────────
+
+LANG_MAP: dict[str, str] = {
+    "ja": "Japanese",
+    "zh": "Chinese",
+    "en": "English",
+    "ko": "Korean",
+    "fr": "French",
+    "de": "German",
+    "es": "Spanish",
+    "ru": "Russian",
+}
+
+
+def init_qwen3_model(device: str) -> Any:
+    """加载 Qwen3-ForcedAligner-0.6B 模型。"""
+    import os
+    import torch
+    from qwen_asr import Qwen3ForcedAligner
+    from writansub.paths import MODELS_DIR
+
+    local_path = os.path.join(MODELS_DIR, "Qwen3-ForcedAligner-0.6B")
+    model_id = local_path if os.path.isdir(local_path) else "Qwen/Qwen3-ForcedAligner-0.6B"
+
+    model = Qwen3ForcedAligner.from_pretrained(
+        model_id,
+        dtype=torch.bfloat16,
+        device_map=device if device != "cuda" else "cuda:0",
+    )
+    return model
+
+
+def run_qwen3_alignment(
+    waveform,
+    subs: list[Sub],
+    device: str = "cuda",
+    pad_sec: float = 0.5,
+    progress_callback: Callable[[float, str], None] | None = None,
+    model: Any | None = None,
+    lang: str = "ja",
+) -> list[Sub]:
+    """
+    使用 Qwen3-ForcedAligner 对所有字幕段执行 forced alignment。
+
+    策略与 MMS_FA 相同：按原 SRT 时间戳截取音频窗口，在窗口内精确定位。
+    Qwen3 直接使用原始文本，不需要罗马音转换。
+    """
+    import numpy as np
+
+    sr = 16000  # waveform 已重采样到 16kHz
+    total_duration = waveform.shape[1] / sr
+
+    if model is None:
+        model = init_qwen3_model(device)
+
+    qwen_lang = LANG_MAP.get(lang, "Japanese")
+
+    results = []
+    success = 0
+    fail = 0
+    total_subs = len(subs)
+
+    for i, sub in enumerate(subs):
+        if progress_callback:
+            progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")
+
+        text = sub.text.strip()
+        if not text:
+            results.append(sub)
+            fail += 1
+            continue
+
+        win_start = max(0.0, sub.start - pad_sec)
+        win_end = min(total_duration, sub.end + pad_sec)
+        start_sample = int(win_start * sr)
+        end_sample = int(win_end * sr)
+        chunk = waveform[:, start_sample:end_sample]
+
+        if chunk.shape[1] < 400:
+            results.append(sub)
+            fail += 1
+            continue
+
+        try:
+            chunk_np = chunk.squeeze(0).numpy().astype(np.float32)
+            align_results = model.align(
+                audio=(chunk_np, sr),
+                text=text,
+                language=qwen_lang,
+            )
+
+            segments = align_results[0] if align_results else []
+            if segments:
+                aligned_start = segments[0].start_time + win_start
+                aligned_end = segments[-1].end_time + win_start
+                results.append(Sub(
+                    index=sub.index,
+                    start=aligned_start,
+                    end=aligned_end,
+                    text=sub.text,
+                    romaji=sub.romaji,
+                    score=1.0,
+                ))
+                success += 1
+            else:
+                results.append(sub)
+                fail += 1
+        except Exception:
+            results.append(sub)
+            fail += 1
+
+    if progress_callback:
+        progress_callback(1.0, f"对齐完成 ({success}成功/{fail}跳过)")
+    print(f"对齐完成: {success} 成功, {fail} 失败/跳过")
+    return results
+
+
 def post_process(
-    subs: List[Sub],
+    subs: list[Sub],
     extend_end: float = 0.30,
     extend_start: float = 0.00,
     gap_threshold: float = 0.50,
     min_gap: float = 0.30,
     min_duration: float = 0.30,
-) -> List[Sub]:
+) -> list[Sub]:
     """
     打轴后处理:
     1. 前端向前延伸 extend_start
@@ -267,7 +364,7 @@ def post_process(
             curr.end = curr.start + 0.01
 
     if min_duration > 0:
-        merged: List[Sub] = []
+        merged: list[Sub] = []
         for sub in out:
             if (sub.end - sub.start) < min_duration and merged:
                 prev = merged[-1]
