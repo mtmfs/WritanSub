@@ -28,9 +28,8 @@ class ResourceRegistry:
     def __init__(self) -> None:
         # 使用底层原生 Registry 类（类级 API，非实例）
         self._native = writansub_native.ResourceRegistry
-        self._threads: dict[int, Any] = {}
-        self._thread_counter: int = 0
         self._model_handles: dict[tuple[str, str], int] = {}
+        self.cancelled = False
 
     def register_model(self, name: str, obj: Any, device: str = "") -> int:
         handle = self._native.register_model(obj)
@@ -79,17 +78,8 @@ class ResourceRegistry:
 
         return subprocess.CompletedProcess(cmd, code, stdout, stderr)
 
-    def register_thread(self, thread: Any) -> int:
-        self._thread_counter += 1
-        self._threads[self._thread_counter] = thread
-        return self._thread_counter
-
-    def unregister_thread(self, handle: int) -> None:
-        self._threads.pop(handle, None)
-
     def shutdown(self) -> None:
-        """物理级清理：强制终止所有 Rust 接管的子进程"""
+        """物理级清理：取消所有任务 + 终止 Rust 接管的子进程"""
         log.info("Native Shutdown Initiated...")
+        self.cancelled = True
         self._native.shutdown()
-        # 清理 Python 线程引用
-        self._threads.clear()

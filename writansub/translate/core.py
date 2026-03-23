@@ -47,6 +47,7 @@ def translate_subs(
     _log(f"共 {total} 条字幕")
 
     translated: dict[int, str] = {}
+    fail_count = 0
 
     for batch_start in range(0, total, batch_size):
         if _cancelled():
@@ -56,7 +57,7 @@ def translate_subs(
         batch = subs[batch_start:batch_end]
 
         lines = [
-            f"{s.index}: {s.text.replace('\n', ' ').strip()}" for s in batch
+            f"{s.index}: {s.text.replace(chr(10), ' ').strip()}" for s in batch
         ]
         prompt = "\n".join(lines)
 
@@ -83,17 +84,22 @@ def translate_subs(
             )
 
             result = response.choices[0].message.content.strip()
+            # 解析响应：支持多行翻译（编号行开头 → 新条目，否则追加到上一条）
+            current_idx = None
             for line in result.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
                 match = re.match(r"(\d+)[:.：]\s*(.+)", line)
                 if match:
-                    idx = int(match.group(1))
-                    text = match.group(2).strip()
-                    translated[idx] = text
+                    current_idx = int(match.group(1))
+                    translated[current_idx] = match.group(2).strip()
+                elif current_idx is not None:
+                    # 非编号行追加到上一条翻译
+                    translated[current_idx] += " " + line
         except Exception as e:
-            _log(f"  批次翻译出错: {e}")
+            fail_count += 1
+            _log(f"  批次 {batch_start+1}-{batch_end} 翻译出错: {e}")
 
     for s in subs:
         if s.index in translated:
@@ -101,7 +107,10 @@ def translate_subs(
 
     if progress_callback:
         progress_callback(1.0, "翻译完成")
-    _log(f"翻译完成 {len(translated)}/{total} 条")
+    msg = f"翻译完成 {len(translated)}/{total} 条"
+    if fail_count > 0:
+        msg += f" ({fail_count} 个批次失败)"
+    _log(msg)
     return subs
 
 

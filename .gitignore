@@ -9,8 +9,8 @@ build/
 .claude/
 
 # GUI 运行时缓存 & 用户配置
-aitrans_pp.json
-aitrans_translate.json
+writansub_pp.json
+writansub_translate.json
 gui_state.json
 
 # 本地工具脚本

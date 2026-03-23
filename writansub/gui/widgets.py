@@ -20,15 +20,20 @@ from writansub.config import (
 
 
 class StateMixin:
-    """Mixin: provides _auto_save() that persists save_state() to gui_state.json.
+    """Mixin: state persistence at task start + program close.
 
     Subclass must implement save_state() -> dict and restore_state(dict).
     """
 
-    def _auto_save(self):
+    def _save_now(self):
+        """立即持久化当前 tab 状态到 gui_state.json"""
         state = load_gui_state()
         state.update(self.save_state())
         save_gui_state(state)
+
+    def _auto_save(self):
+        """向后兼容：信号连接仍在但不再触发 I/O"""
+        pass
 
 
 # ── Wheel-scroll guard mixin ──────────────────────────────────────────
@@ -222,21 +227,12 @@ class NoScrollSpinBox(_NoScrollMixin, QDoubleSpinBox):
 
 
 class ParamSpinBox(_NoScrollMixin, QDoubleSpinBox):
-    """参数 SpinBox，值变化时自动保存配置。
-    滚轮仅在获得焦点时生效，防止滚动页面时误触。"""
+    """参数 SpinBox，滚轮仅在获得焦点时生效，防止滚动页面时误触。
+    值由 MainWindow.closeEvent() 统一持久化。"""
 
     def __init__(self, key: str, parent=None):
         self._key = key
         super().__init__(parent)
-        self.valueChanged.connect(self._on_change)
-
-    def _on_change(self, value: float) -> None:
-        try:
-            current = load_pp_config()
-            current[self._key] = round(value, 2)
-            save_pp_config(current)
-        except Exception:
-            pass
 
 
 # ── Parameter grid builder ────────────────────────────────────────────

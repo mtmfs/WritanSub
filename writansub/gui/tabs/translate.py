@@ -14,19 +14,7 @@ from writansub.types import TRANSLATE_TARGETS
 from writansub.subtitle.srt_io import parse_srt, write_srt
 from writansub.translate.core import translate_subs
 from writansub.config import load_translate_config, save_translate_config, load_gui_state
-from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, StateMixin
-
-# 状态字段 → (widget 属性, setter/getter 类型)
-_STATE_FIELDS = {
-    "translate.srt": "_srt_edit",
-    "translate.output": "_out_edit",
-    "translate.target_lang": "_target_combo",
-    "translate.model": "_model_edit",
-    "translate.api_base": "_base_edit",
-    "translate.api_key": "_key_edit",
-}
-
 
 class _TranslateSignals(QObject):
     """线程安全的信号"""
@@ -177,14 +165,18 @@ class TranslateTab(StateMixin, QWidget):
         }
 
     def restore_state(self, state: dict):
-        for key, attr in _STATE_FIELDS.items():
-            if key not in state:
-                continue
-            widget = getattr(self, attr)
-            if hasattr(widget, "setCurrentText"):
-                widget.setCurrentText(state[key])
-            else:
-                widget.setText(state[key])
+        if "translate.srt" in state:
+            self._srt_edit.setText(state["translate.srt"])
+        if "translate.output" in state:
+            self._out_edit.setText(state["translate.output"])
+        if "translate.target_lang" in state:
+            self._target_combo.setCurrentText(state["translate.target_lang"])
+        if "translate.model" in state:
+            self._model_edit.setText(state["translate.model"])
+        if "translate.api_base" in state:
+            self._base_edit.setText(state["translate.api_base"])
+        if "translate.api_key" in state:
+            self._key_edit.setText(state["translate.api_key"])
 
     def _browse_srt(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -222,6 +214,7 @@ class TranslateTab(StateMixin, QWidget):
 
         cfg = self._get_translate_config()
         save_translate_config(cfg)
+        self._save_now()
 
         self._start_btn.setEnabled(False)
         self._log.clear_log()
@@ -232,8 +225,6 @@ class TranslateTab(StateMixin, QWidget):
             args=(srt, output, cfg),
             daemon=True,
         )
-        reg = ResourceRegistry.instance()
-        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_translate(self, srt: str, output: str, cfg: dict):
@@ -259,5 +250,4 @@ class TranslateTab(StateMixin, QWidget):
         except Exception as e:
             self._log.log(f"出错: {e}")
         finally:
-            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()

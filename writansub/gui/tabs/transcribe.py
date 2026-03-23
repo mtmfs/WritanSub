@@ -15,7 +15,6 @@ from writansub.transcribe.core import transcribe
 from writansub.subtitle.review import generate_review, write_review_files
 from writansub.subtitle.srt_io import write_srt
 from writansub.config import PARAM_DEFS, load_gui_state
-from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin
 
 
@@ -213,6 +212,7 @@ class WhisperTab(StateMixin, QWidget):
             output = os.path.splitext(media)[0] + ".srt"
             self._output_edit.setText(output)
 
+        self._save_now()
         self._start_btn.setEnabled(False)
         self._log.clear_log()
         self._progress.reset()
@@ -228,8 +228,6 @@ class WhisperTab(StateMixin, QWidget):
             args=(media, output, lang, model_size, device, wc, cond_prev),
             daemon=True,
         )
-        reg = ResourceRegistry.instance()
-        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_whisper(self, media: str, output: str, lang: str,
@@ -258,5 +256,4 @@ class WhisperTab(StateMixin, QWidget):
         except Exception as e:
             self._log.log(f"出错: {e}")
         finally:
-            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()

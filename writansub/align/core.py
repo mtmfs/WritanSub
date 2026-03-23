@@ -1,6 +1,7 @@
 """强制对齐：罗马音转换、音频加载、MMS_FA / Qwen3 对齐、后处理"""
 
 import re
+from dataclasses import replace
 from typing import Any, Callable
 
 from writansub.types import Sub
@@ -127,81 +128,6 @@ def align_segment(
     return (start_sec, end_sec, avg_score)
 
 
-def run_alignment(
-    waveform,
-    subs: list[Sub],
-    device: str = "cuda",
-    pad_sec: float = 0.5,
-    progress_callback: Callable[[float, str], None] | None = None,
-    model_bundle: tuple | None = None,
-) -> list[Sub]:
-    """
-    对所有字幕段执行 forced alignment。
-
-    策略: 按原 SRT 时间戳截取音频窗口（前后各扩展 pad_sec），
-    在窗口内用 MMS_FA 精确定位语音起止点。
-
-    Args:
-        model_bundle: 预加载的 (model, tokenizer, aligner)，为 None 时内部创建
-    """
-    from torchaudio.pipelines import MMS_FA as bundle
-
-    sr = bundle.sample_rate
-    total_duration = waveform.shape[1] / sr
-
-    if model_bundle is not None:
-        model, tokenizer, aligner = model_bundle
-    else:
-        model, tokenizer, aligner = init_model(device)
-
-    results = []
-    success = 0
-    fail = 0
-    total_subs = len(subs)
-
-    for i, sub in enumerate(subs):
-        if progress_callback:
-            progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")
-
-        if not sub.romaji:
-            results.append(sub)
-            fail += 1
-            continue
-
-        win_start = max(0.0, sub.start - pad_sec)
-        win_end = min(total_duration, sub.end + pad_sec)
-        start_sample = int(win_start * sr)
-        end_sample = int(win_end * sr)
-        chunk = waveform[:, start_sample:end_sample]
-
-        if chunk.shape[1] < 400:
-            results.append(sub)
-            fail += 1
-            continue
-
-        result = align_segment(chunk, sub.romaji, model, tokenizer, aligner, device)
-
-        if result is not None:
-            aligned_start, aligned_end, avg_score = result
-            results.append(Sub(
-                index=sub.index,
-                start=aligned_start + win_start,
-                end=aligned_end + win_start,
-                text=sub.text,
-                romaji=sub.romaji,
-                score=avg_score,
-            ))
-            success += 1
-        else:
-            results.append(sub)
-            fail += 1
-
-    if progress_callback:
-        progress_callback(1.0, f"对齐完成 ({success}成功/{fail}跳过)")
-    print(f"对齐完成: {success} 成功, {fail} 失败/跳过")
-    return results
-
-
 # ── Qwen3-ForcedAligner ──────────────────────────────────────────
 
 LANG_MAP: dict[str, str] = {
@@ -213,6 +139,7 @@ LANG_MAP: dict[str, str] = {
     "de": "German",
     "es": "Spanish",
     "ru": "Russian",
+    "vi": "Vietnamese",
 }
 
 
@@ -234,30 +161,73 @@ def init_qwen3_model(device: str) -> Any:
     return model
 
 
-def run_qwen3_alignment(
+# ── 统一对齐入口 ──────────────────────────────────────────
+
+
+def _align_one_mms(chunk, sub, model_bundle, device, sr):
+    """MMS_FA 单段对齐，返回 (start, end, score) 或 None。"""
+    if not sub.romaji:
+        return None
+    model, tokenizer, aligner = model_bundle
+    return align_segment(chunk, sub.romaji, model, tokenizer, aligner, device)
+
+
+def _align_one_qwen3(chunk, sub, qwen3_model, sr, qwen_lang):
+    """Qwen3 单段对齐，返回 (start, end, score) 或 None。"""
+    import numpy as np
+
+    text = sub.text.strip()
+    if not text:
+        return None
+    try:
+        chunk_np = chunk.squeeze(0).numpy().astype(np.float32)
+        align_results = qwen3_model.align(
+            audio=(chunk_np, sr), text=text, language=qwen_lang,
+        )
+        segments = align_results[0] if align_results else []
+        if segments:
+            return (segments[0].start_time, segments[-1].end_time, 1.0)
+    except Exception:
+        pass
+    return None
+
+
+def run_alignment(
     waveform,
     subs: list[Sub],
     device: str = "cuda",
     pad_sec: float = 0.5,
     progress_callback: Callable[[float, str], None] | None = None,
-    model: Any | None = None,
+    model_bundle: tuple | None = None,
+    log_callback: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    *,
+    qwen3_model: Any | None = None,
     lang: str = "ja",
 ) -> list[Sub]:
     """
-    使用 Qwen3-ForcedAligner 对所有字幕段执行 forced alignment。
+    对所有字幕段执行 forced alignment（MMS_FA 或 Qwen3）。
 
-    策略与 MMS_FA 相同：按原 SRT 时间戳截取音频窗口，在窗口内精确定位。
-    Qwen3 直接使用原始文本，不需要罗马音转换。
+    - 传入 model_bundle → 使用 MMS_FA
+    - 传入 qwen3_model → 使用 Qwen3-ForcedAligner
+    - 都不传 → 默认创建 MMS_FA
     """
-    import numpy as np
+    use_qwen3 = qwen3_model is not None
 
-    sr = 16000  # waveform 已重采样到 16kHz
+    if use_qwen3:
+        sr = 16000
+        qwen_lang = LANG_MAP.get(lang, "Japanese")
+        align_fn = lambda chunk, sub: _align_one_qwen3(chunk, sub, qwen3_model, sr, qwen_lang)
+    else:
+        from torchaudio.pipelines import MMS_FA as bundle
+        sr = bundle.sample_rate
+        if model_bundle is None:
+            model_bundle = init_model(device)
+        align_fn = lambda chunk, sub: _align_one_mms(chunk, sub, model_bundle, device, sr)
+
     total_duration = waveform.shape[1] / sr
-
-    if model is None:
-        model = init_qwen3_model(device)
-
-    qwen_lang = LANG_MAP.get(lang, "Japanese")
+    _cancelled = cancelled or (lambda: False)
+    _log = log_callback or (lambda msg: None)
 
     results = []
     success = 0
@@ -265,14 +235,11 @@ def run_qwen3_alignment(
     total_subs = len(subs)
 
     for i, sub in enumerate(subs):
+        if _cancelled():
+            break
+
         if progress_callback:
             progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")
-
-        text = sub.text.strip()
-        if not text:
-            results.append(sub)
-            fail += 1
-            continue
 
         win_start = max(0.0, sub.start - pad_sec)
         win_end = min(total_duration, sub.end + pad_sec)
@@ -285,38 +252,49 @@ def run_qwen3_alignment(
             fail += 1
             continue
 
-        try:
-            chunk_np = chunk.squeeze(0).numpy().astype(np.float32)
-            align_results = model.align(
-                audio=(chunk_np, sr),
-                text=text,
-                language=qwen_lang,
-            )
+        result = align_fn(chunk, sub)
 
-            segments = align_results[0] if align_results else []
-            if segments:
-                aligned_start = segments[0].start_time + win_start
-                aligned_end = segments[-1].end_time + win_start
-                results.append(Sub(
-                    index=sub.index,
-                    start=aligned_start,
-                    end=aligned_end,
-                    text=sub.text,
-                    romaji=sub.romaji,
-                    score=1.0,
-                ))
-                success += 1
-            else:
-                results.append(sub)
-                fail += 1
-        except Exception:
+        if result is not None:
+            aligned_start, aligned_end, avg_score = result
+            results.append(Sub(
+                index=sub.index,
+                start=aligned_start + win_start,
+                end=aligned_end + win_start,
+                text=sub.text,
+                romaji=sub.romaji,
+                score=avg_score,
+            ))
+            success += 1
+        else:
             results.append(sub)
             fail += 1
 
     if progress_callback:
         progress_callback(1.0, f"对齐完成 ({success}成功/{fail}跳过)")
-    print(f"对齐完成: {success} 成功, {fail} 失败/跳过")
+    _log(f"对齐完成: {success} 成功, {fail} 失败/跳过")
     return results
+
+
+def run_qwen3_alignment(
+    waveform,
+    subs: list[Sub],
+    device: str = "cuda",
+    pad_sec: float = 0.5,
+    progress_callback: Callable[[float, str], None] | None = None,
+    model: Any | None = None,
+    lang: str = "ja",
+    log_callback: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> list[Sub]:
+    """run_alignment 的 Qwen3 便捷入口（保持向后兼容）。"""
+    if model is None:
+        model = init_qwen3_model(device)
+    return run_alignment(
+        waveform, subs, device=device, pad_sec=pad_sec,
+        progress_callback=progress_callback,
+        log_callback=log_callback, cancelled=cancelled,
+        qwen3_model=model, lang=lang,
+    )
 
 
 def post_process(
@@ -340,7 +318,7 @@ def post_process(
     if not subs:
         return subs
 
-    out = [Sub(s.index, s.start, s.end, s.text, s.romaji, s.score) for s in subs]
+    out = [replace(s) for s in subs]
     raw_starts = [s.start for s in out]
     raw_ends = [s.end for s in out]
 

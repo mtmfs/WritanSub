@@ -56,14 +56,18 @@ def save_wav(waveform: torch.Tensor, path: str, sr: int) -> None:
         wf.writeframes(pcm)
 
 
-def _load_dnr_model(device: str, cache_dir: str = "cache") -> Any:
+def _load_dnr_model(device: str, cache_dir: str = "") -> Any:
     from writansub.vendor.tiger import TIGERDNR
+    from writansub.paths import CACHE_DIR
+    cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
     return TIGERDNR.from_pretrained("JusperLee/TIGER-DnR", cache_dir=cache_dir).to(device).eval()
 
 
-def _load_speech_model(device: str, cache_dir: str = "cache") -> Any:
+def _load_speech_model(device: str, cache_dir: str = "") -> Any:
     from writansub.vendor.tiger import TIGER
+    from writansub.paths import CACHE_DIR
+    cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
     return TIGER.from_pretrained("JusperLee/TIGER-speech", cache_dir=cache_dir).to(device).eval()
 
@@ -128,7 +132,7 @@ def separate_dnr(
     waveform: torch.Tensor,
     sr: int,
     device: str = "cpu",
-    cache_dir: str = "cache",
+    cache_dir: str = "",
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -227,7 +231,7 @@ def separate_speakers(
     dialog_wav: torch.Tensor,
     dialog_sr: int,
     device: str = "cpu",
-    cache_dir: str = "cache",
+    cache_dir: str = "",
     log_callback: Callable[[str], None] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """说话人分离"""
@@ -414,7 +418,7 @@ def _make_file_progress(idx: int, total: int, cb: Callable[[float, str], None] |
 def run_dnr_batch(
     media_files: list[str],
     device: str = "cpu",
-    cache_dir: str = "cache",
+    cache_dir: str = "",
     save_intermediate: bool = False,
     mss_model: str = "tiger-dnr",
     log_callback: Callable[[str], None] | None = None,
@@ -459,7 +463,7 @@ def run_dnr_batch(
 def run_speech_batch(
     dnr_results: dict,
     device: str = "cpu",
-    cache_dir: str = "cache",
+    cache_dir: str = "",
     save_intermediate: bool = False,
     ss_model: str = "tiger-speech",
     log_callback: Callable[[str], None] | None = None,

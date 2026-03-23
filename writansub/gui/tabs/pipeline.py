@@ -1,5 +1,4 @@
 import os
-import sys
 import threading
 
 from PySide6.QtWidgets import (
@@ -18,7 +17,7 @@ from writansub.translate.core import translate_subs
 from writansub.config import load_gui_state, load_translate_config
 from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import (
-    TextRedirector, LogWidget, ProgressWidget, build_params_grid,
+    LogWidget, ProgressWidget, build_params_grid,
     NoScrollComboBox, GroupedComboBox, StateMixin,
 )
 
@@ -44,7 +43,6 @@ class PipelineTab(StateMixin, QWidget):
         super().__init__(parent)
         self._orchestrator = None
         self._running = False
-        self._cancelled = False
         self._media_files: list[str] = []
 
         self._signals = _PipelineSignals()
@@ -332,7 +330,7 @@ class PipelineTab(StateMixin, QWidget):
         self._set_buttons_state(False)
 
     def _cancel(self):
-        self._cancelled = True
+        ResourceRegistry.instance().cancelled = True
         self._signals.log_requested.emit("正在取消任务...")
 
     # ── 流水线启动 ──
@@ -349,8 +347,9 @@ class PipelineTab(StateMixin, QWidget):
             self._signals.log_requested.emit("请先添加媒体文件")
             return
 
+        self._save_now()
         self._running = True
-        self._cancelled = False
+        ResourceRegistry.instance().cancelled = False
         self._set_buttons_state(True)
         self._log.clear_log()
         self._progress.reset()
@@ -383,8 +382,6 @@ class PipelineTab(StateMixin, QWidget):
             ),
             daemon=True,
         )
-        reg = ResourceRegistry.instance()
-        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     # ── 流水线执行 (后台线程) ──
@@ -394,12 +391,12 @@ class PipelineTab(StateMixin, QWidget):
                       mss_model, ss_model, tiger_save):
         import torch
 
-        redirector = TextRedirector(self._log)
-        old_stdout = sys.stdout
-        sys.stdout = redirector
+        reg = ResourceRegistry.instance()
+        _cancelled = lambda: reg.cancelled
 
-        wc_threshold = pp.pop("word_conf_threshold", 0.50)
-        ac_threshold = pp.pop("align_conf_threshold", 0.50)
+        wc_threshold = pp.get("word_conf_threshold", 0.50)
+        ac_threshold = pp.get("align_conf_threshold", 0.50)
+        pp = {k: v for k, v in pp.items() if k not in ("word_conf_threshold", "align_conf_threshold")}
 
         num_phases = 2 + (1 if translate_cfg else 0) + (1 if tiger_mode else 0)
         phase_offset = 1 if tiger_mode else 0
@@ -412,10 +409,10 @@ class PipelineTab(StateMixin, QWidget):
             sub_results, word_results, tiger_results = {}, {}, {}
 
             # Phase: TIGER 增强
-            if tiger_mode and not self._cancelled:
+            if tiger_mode and not _cancelled():
                 tiger_results = self._run_tiger_phase(
                     media_files, tiger_mode, tiger_save, mss_model, ss_model,
-                    device, num_phases, log_emit, prog_emit,
+                    device, num_phases, log_emit, prog_emit, _cancelled,
                 )
 
             # Phase: Whisper 转录
@@ -431,7 +428,7 @@ class PipelineTab(StateMixin, QWidget):
             whisper_model = reg.get_model(wh)
 
             for idx, media in enumerate(media_files, 1):
-                if self._cancelled:
+                if _cancelled():
                     break
 
                 def _w_p(pct, msg):
@@ -442,7 +439,7 @@ class PipelineTab(StateMixin, QWidget):
 
                 subs, word_data = self._transcribe_single(
                     media, tiger_results.get(media), lang, device,
-                    cond_prev, whisper_model, _w_p,
+                    cond_prev, whisper_model, _w_p, _cancelled,
                 )
                 sub_results[media] = subs
                 word_results[media] = word_data
@@ -460,7 +457,7 @@ class PipelineTab(StateMixin, QWidget):
             # Phase: 对齐
             a_phase = 2 + phase_offset
             aligned_results = {}
-            if sub_results and not self._cancelled:
+            if sub_results and not _cancelled():
                 use_qwen3 = (align_model == "qwen3-fa-0.6b")
                 label = "Qwen3 对齐" if use_qwen3 else "MMS 对齐"
                 log_emit(f">>> Phase {a_phase}/{num_phases}: {label}")
@@ -474,7 +471,7 @@ class PipelineTab(StateMixin, QWidget):
                     mms_bundle = reg.get_model(mh)
 
                 for idx, media in enumerate(media_files, 1):
-                    if self._cancelled or media not in sub_results:
+                    if _cancelled() or media not in sub_results:
                         continue
 
                     def _a_p(pct, msg):
@@ -490,12 +487,16 @@ class PipelineTab(StateMixin, QWidget):
                             waveform, sub_results[media],
                             device=device, progress_callback=_a_p,
                             model=qwen3_model, lang=lang,
+                            log_callback=log_emit,
+                            cancelled=_cancelled,
                         )
                     else:
                         populate_romaji(sub_results[media], lang)
                         aligned = run_alignment(
                             waveform, sub_results[media],
                             device=device, progress_callback=_a_p, model_bundle=mms_bundle,
+                            log_callback=log_emit,
+                            cancelled=_cancelled,
                         )
 
                     final = post_process(aligned, **pp)
@@ -512,10 +513,10 @@ class PipelineTab(StateMixin, QWidget):
                 reg.release_model(mh)
 
             # Phase: AI 翻译
-            if translate_cfg and aligned_results and not self._cancelled:
+            if translate_cfg and aligned_results and not _cancelled():
                 log_emit(f">>> Phase {num_phases}/{num_phases}: AI 翻译")
                 for idx, media in enumerate(media_files, 1):
-                    if self._cancelled or media not in aligned_results:
+                    if _cancelled() or media not in aligned_results:
                         continue
 
                     def _t_p(pct, msg):
@@ -527,28 +528,28 @@ class PipelineTab(StateMixin, QWidget):
                     translate_subs(
                         aligned_results[media], **translate_cfg,
                         log_callback=log_emit, progress_callback=_t_p,
+                        cancelled=_cancelled,
                     )
                     write_srt(
                         merge_bilingual(aligned_results[media]),
                         os.path.splitext(media)[0] + ".srt",
                     )
-            elif aligned_results and not self._cancelled:
+            elif aligned_results and not _cancelled():
                 for media, subs in aligned_results.items():
                     write_srt(subs, os.path.splitext(media)[0] + ".srt")
 
-            if not self._cancelled:
+            if not _cancelled():
                 prog_emit(1.0, "任务完成")
                 log_emit(f"全部完成! 已处理 {total} 个文件")
 
         except Exception as e:
             log_emit(f"发生错误: {e}")
         finally:
-            sys.stdout = old_stdout
-            reg.unregister_thread(self._thread_handle)
             self._signals.finished.emit()
 
     def _run_tiger_phase(self, media_files, tiger_mode, tiger_save, mss_model,
-                         ss_model, device, num_phases, log_emit, prog_emit) -> dict:
+                         ss_model, device, num_phases, log_emit, prog_emit,
+                         cancelled) -> dict:
         """执行 TIGER 增强阶段，返回 tiger_results"""
         log_emit(f">>> Phase 1/{num_phases}: TIGER 增强")
         from writansub.preprocess.core import run_dnr_batch, run_speech_batch
@@ -565,7 +566,7 @@ class PipelineTab(StateMixin, QWidget):
             log_callback=log_emit, progress_callback=_dnr_p,
         )
 
-        if do_speech and tiger_results and not self._cancelled:
+        if do_speech and tiger_results and not cancelled():
             def _spk_p(pct, msg):
                 prog_emit((0.5 + pct * 0.5) / num_phases, f"[TIGER] {msg}")
 
@@ -578,7 +579,7 @@ class PipelineTab(StateMixin, QWidget):
         return tiger_results
 
     def _transcribe_single(self, media, tiger_data, lang, device,
-                           cond_prev, whisper_model, progress_callback):
+                           cond_prev, whisper_model, progress_callback, cancelled):
         """对单个媒体文件执行 Whisper 转录，处理 TIGER 增强数据"""
         whisper_input = media
         tmp_dialog = None
@@ -602,6 +603,7 @@ class PipelineTab(StateMixin, QWidget):
                     whisper_input, overlap_r, separated,
                     tiger_data.get("spk_sr", 16000),
                     lang, device, cond_prev, whisper_model, progress_callback,
+                    cancelled,
                 )
 
             return transcribe(
@@ -609,6 +611,7 @@ class PipelineTab(StateMixin, QWidget):
                 log_callback=self._signals.log_requested.emit,
                 progress_callback=progress_callback,
                 condition_on_previous_text=cond_prev, model=whisper_model,
+                cancelled=cancelled,
             )
         finally:
             if tmp_dialog:
@@ -619,7 +622,7 @@ class PipelineTab(StateMixin, QWidget):
 
     def _whisper_with_overlap(self, media, overlap_regions, separated_tracks,
                               spk_sr, lang, device, cond_prev, whisper_model,
-                              progress_callback):
+                              progress_callback, cancelled):
         """重叠区域分轨转录并合并结果"""
         import tempfile
         from writansub.preprocess.core import save_wav
@@ -629,6 +632,7 @@ class PipelineTab(StateMixin, QWidget):
             log_callback=self._signals.log_requested.emit,
             progress_callback=progress_callback,
             condition_on_previous_text=cond_prev, model=whisper_model,
+            cancelled=cancelled,
         )
         if not overlap_regions:
             return full_subs, full_word_data
@@ -637,7 +641,7 @@ class PipelineTab(StateMixin, QWidget):
         spk1_wav, spk2_wav = separated_tracks
 
         for region in overlap_regions:
-            if self._cancelled:
+            if cancelled():
                 break
             start = int(region.start * spk_sr)
             end = int(region.end * spk_sr)
@@ -665,13 +669,14 @@ class PipelineTab(StateMixin, QWidget):
                     except OSError:
                         pass
 
-        # 标记落在重叠区域内的原始字幕
-        for sub in full_subs:
+        # 过滤掉落在重叠区域内的原始字幕
+        commented = set()
+        for i, sub in enumerate(full_subs):
             mid = (sub.start + sub.end) / 2
             if any(r.start <= mid <= r.end for r in overlap_regions):
-                sub.commented = True
+                commented.add(i)
 
-        active = [s for s in full_subs if not s.commented] + overlap_subs
+        active = [s for i, s in enumerate(full_subs) if i not in commented] + overlap_subs
         active.sort(key=lambda s: s.start)
         for i, s in enumerate(active, 1):
             s.index = i

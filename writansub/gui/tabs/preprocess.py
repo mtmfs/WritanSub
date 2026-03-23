@@ -12,7 +12,6 @@ from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.types import MEDIA_FILETYPES, MSS_MODELS, SS_MODELS
 from writansub.config import load_gui_state
-from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, StateMixin
 
 
@@ -184,9 +183,9 @@ class TigerTab(StateMixin, QWidget):
     # ── 文件管理 ──
 
     def _add_files(self):
-        exts = " ".join(f"*{e}" for e in MEDIA_FILETYPES)
+        filter_str = ";;".join(f"{label} ({exts})" for label, exts in MEDIA_FILETYPES)
         files, _ = QFileDialog.getOpenFileNames(
-            self, "选择媒体文件", "", f"媒体文件 ({exts})")
+            self, "选择媒体文件", "", filter_str)
         for f in files:
             if f not in self._media_files:
                 self._media_files.append(f)
@@ -221,6 +220,7 @@ class TigerTab(StateMixin, QWidget):
             self._log.log("请至少选择一项处理（降噪或对话分轨）")
             return
 
+        self._save_now()
         self._start_btn.setEnabled(False)
         self._progress.reset()
         self._log.clear_log()
@@ -236,8 +236,6 @@ class TigerTab(StateMixin, QWidget):
             args=(list(self._media_files), mss_model, do_separate, ss_model, save_intermediate, device),
             daemon=True,
         )
-        reg = ResourceRegistry.instance()
-        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_tiger(self, media_files: list[str], mss_model: str, do_separate: bool,
@@ -287,7 +285,6 @@ class TigerTab(StateMixin, QWidget):
         except Exception as e:
             log(f"处理出错: {e}")
         finally:
-            ResourceRegistry.instance().unregister_thread(self._thread_handle)
             self._signals.finished.emit()
 
     def _on_finished(self):

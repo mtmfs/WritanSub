@@ -1,6 +1,5 @@
 """单独强制打轴页"""
 
-import sys
 import threading
 
 from PySide6.QtWidgets import (
@@ -18,7 +17,7 @@ from writansub.align.core import (
 from writansub.config import load_gui_state
 from writansub.bridge import ResourceRegistry
 from writansub.gui.widgets import (
-    TextRedirector, LogWidget, ProgressWidget, build_params_grid,
+    LogWidget, ProgressWidget, build_params_grid,
     NoScrollComboBox, GroupedComboBox, StateMixin,
 )
 
@@ -228,6 +227,7 @@ class AlignmentTab(StateMixin, QWidget):
             output = f"{base}_aligned.srt"
             self._out_edit.setText(output)
 
+        self._save_now()
         self._start_btn.setEnabled(False)
         self._log.clear_log()
         self._progress.reset()
@@ -242,18 +242,12 @@ class AlignmentTab(StateMixin, QWidget):
             args=(audio, srt, output, device, pp, lang, align_model),
             daemon=True,
         )
-        reg = ResourceRegistry.instance()
-        self._thread_handle = reg.register_thread(thread)
         thread.start()
 
     def _run_alignment(self, audio: str, srt: str, output: str,
                        device: str, pp: dict[str, float],
                        lang: str = "ja", align_model: str = "mms_fa"):
         import torch
-
-        redirector = TextRedirector(self._log)
-        old_stdout = sys.stdout
-        sys.stdout = redirector
 
         reg = ResourceRegistry.instance()
         model_handle = None
@@ -279,6 +273,7 @@ class AlignmentTab(StateMixin, QWidget):
                     waveform, subs, device=device,
                     progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
                     model=qwen3_model, lang=lang,
+                    log_callback=self._log.log,
                 )
             else:
                 model_bundle = init_model(device)
@@ -288,6 +283,7 @@ class AlignmentTab(StateMixin, QWidget):
                     waveform, subs, device=device,
                     progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
                     model_bundle=model_bundle,
+                    log_callback=self._log.log,
                 )
 
             self._progress.update_progress(0.95, "后处理...")
@@ -302,6 +298,4 @@ class AlignmentTab(StateMixin, QWidget):
         finally:
             if model_handle is not None:
                 reg.unload_model(model_handle)
-            sys.stdout = old_stdout
-            reg.unregister_thread(self._thread_handle)
             self._signals.finished.emit()

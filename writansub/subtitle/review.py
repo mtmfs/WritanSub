@@ -3,7 +3,22 @@
 import os
 import re
 
-from writansub.types import Sub, WordInfo, fmt_srt_time, fmt_ass_time, _ASS_REVIEW_HEADER
+from writansub.types import Sub, WordInfo, fmt_srt_time, fmt_ass_time
+
+_ASS_REVIEW_HEADER = """\
+[Script Info]
+Title: AItrans Review
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
 
 
 def generate_review(

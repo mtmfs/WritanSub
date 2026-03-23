@@ -6,7 +6,7 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 
-from writansub.config import load_gui_state, save_gui_state
+from writansub.config import load_gui_state, save_gui_state, save_pp_config
 from writansub.gui.tabs.align import AlignmentTab
 from writansub.gui.tabs.pipeline import PipelineTab
 from writansub.gui.tabs.preprocess import TigerTab
@@ -47,7 +47,7 @@ class MainWindow(QMainWindow):
             self.pipeline_tab.set_media_path(initial_media)
 
     def closeEvent(self, event) -> None:
-        """关闭时：停止所有资源 → 保存 GUI 状态"""
+        """关闭时：停止所有资源 → 保存 GUI 状态 + PP 参数"""
         from writansub.bridge import ResourceRegistry
 
         ResourceRegistry.instance().shutdown()
@@ -56,6 +56,14 @@ class MainWindow(QMainWindow):
         for tab in self._tabs:
             state.update(tab.save_state())
         save_gui_state(state)
+
+        # 收集所有 ParamSpinBox 当前值，保存 PP 配置
+        from writansub.gui.widgets import ParamSpinBox
+        pp = {}
+        for spin in self.findChildren(ParamSpinBox):
+            pp[spin._key] = round(spin.value(), 2)
+        if pp:
+            save_pp_config(pp)
 
         super().closeEvent(event)
 

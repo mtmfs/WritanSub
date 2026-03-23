@@ -14,6 +14,7 @@ def transcribe(
     condition_on_previous_text: bool = True,
     model: Any | None = None,
     model_size: str = "large-v3",
+    cancelled: Callable[[], bool] | None = None,
 ) -> tuple[list[Sub], list[list[WordInfo]]]:
     """
     使用 faster_whisper 将媒体文件转录为字幕列表。
@@ -28,6 +29,7 @@ def transcribe(
         progress_callback: 进度回调 (pct, msg) -> None
         condition_on_previous_text: 是否用前一句结果作为下一句上下文
         model: 预加载的 WhisperModel，为 None 时内部创建
+        cancelled: 取消检查回调，返回 True 时中断识别
 
     Returns:
         (subs, word_data):
@@ -35,6 +37,7 @@ def transcribe(
             word_data — list[list[WordInfo]] 每句的词级数据
     """
     _log = log_callback or (lambda msg: None)
+    _cancelled = cancelled or (lambda: False)
 
     def _progress(pct: float, msg: str = "") -> None:
         if progress_callback:
@@ -58,6 +61,10 @@ def transcribe(
     word_data: list[list[WordInfo]] = []
 
     for i, seg in enumerate(segments, 1):
+        if _cancelled():
+            _log("识别已取消")
+            break
+
         subs.append(Sub(
             index=i,
             start=seg.start,
@@ -77,10 +84,7 @@ def transcribe(
         )
 
     if own_model:
-        from writansub.bridge import ResourceRegistry
-        reg = ResourceRegistry.instance()
-        h = reg.register_model(f"whisper:{model_size}", model, device)
-        reg.unload_model(h)
+        del model
 
     _progress(1.0, "识别完成")
     return subs, word_data

@@ -18,7 +18,7 @@ SRT_FILETYPES = [
     ("所有文件", "*.*"),
 ]
 
-LANGUAGES = ["ja", "zh", "en", "ko", "fr", "de", "es", "ru"]
+LANGUAGES = ["ja", "zh", "en", "ko", "fr", "de", "es", "ru", "vi"]
 
 WHISPER_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Whisper", [
@@ -82,44 +82,23 @@ class Sub:
     romaji: str = ""      # 罗马音（用于 alignment）
     score: float = 0.0    # 对齐置信度
     translated: str = ""  # 翻译文本
-    commented: bool = False  # 被重叠替换后标记为"注释"
-
-
-def _hms_parts(seconds: float) -> tuple[int, int, int, float]:
-    """将秒拆分为 (时, 分, 秒, 小数秒) 四元组。"""
-    seconds = max(0.0, seconds)
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    frac = seconds % 1
-    return h, m, s, frac
 
 
 def fmt_srt_time(seconds: float) -> str:
     """秒 → SRT 时间格式 HH:MM:SS,mmm"""
-    h, m, s, frac = _hms_parts(seconds)
-    ms = min(int(round(frac * 1000)), 999)
+    total_ms = max(0, round(seconds * 1000))
+    h, rem = divmod(total_ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def fmt_ass_time(seconds: float) -> str:
     """秒 → ASS 时间格式 H:MM:SS.cc"""
-    h, m, s, frac = _hms_parts(seconds)
-    cs = min(int(round(frac * 100)), 99)
+    total_cs = max(0, round(seconds * 100))
+    h, rem = divmod(total_cs, 360_000)
+    m, rem = divmod(rem, 6_000)
+    s, cs = divmod(rem, 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
 
 
-_ASS_REVIEW_HEADER = """\
-[Script Info]
-Title: AItrans Review
-ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
