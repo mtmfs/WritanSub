@@ -1,7 +1,6 @@
 """TIGER 语音分离逻辑 (DnR) + 说话人分离 (Speech) + VAD 重叠检测"""
 
 import os
-import shutil
 import wave
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -18,28 +17,6 @@ class TimeSpan:
     """时间段定义"""
     start: float
     end: float
-
-
-def load_audio_for_tiger(path: str, target_sr: int = 44100) -> tuple[torch.Tensor, int]:
-    """加载音频为 [1, T] float32 tensor，采样率为 target_sr"""
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        from imageio_ffmpeg import get_ffmpeg_exe
-        ffmpeg = get_ffmpeg_exe()
-
-    cmd = [
-        ffmpeg, "-i", path,
-        "-f", "s16le", "-ac", "1", "-ar", str(target_sr),
-        "-loglevel", "error", "-",
-    ]
-    reg = ResourceRegistry.instance()
-    proc = reg.run_subprocess(cmd, timeout=600)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg 执行失败: {proc.stderr.decode(errors='replace')}")
-
-    data = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
-    waveform = torch.from_numpy(data).unsqueeze(0)  # [1, T]
-    return waveform, target_sr
 
 
 def save_wav(waveform: torch.Tensor, path: str, sr: int) -> None:
@@ -434,7 +411,7 @@ def run_dnr_batch(
         _file_progress = _make_file_progress(idx, total, progress_callback)
 
         _file_progress(0.0, f"{file_info} 正在加载音频...")
-        waveform, sr = load_audio_for_tiger(media, target_sr=44100)
+        waveform, sr = ResourceRegistry.instance().decode_audio(media, sample_rate=44100)
 
         _sub_progress = lambda pct, msg, _fp=_file_progress, _fi=file_info: _fp(pct, f"{_fi} {msg}")
 

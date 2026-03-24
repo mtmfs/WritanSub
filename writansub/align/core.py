@@ -73,10 +73,10 @@ def text_to_romaji(text: str, lang: str) -> str:
 
 
 def load_audio(path: str):
-    """加载音频，重采样到 16kHz，返回单声道 [1, T] Tensor。"""
+    """加载任意媒体文件，解码为 MMS_FA 所需的 16kHz 单声道 [1, T] Tensor。"""
     from torchaudio.pipelines import MMS_FA as bundle
-    from writansub.preprocess.core import load_audio_for_tiger
-    waveform, _ = load_audio_for_tiger(path, target_sr=bundle.sample_rate)
+    from writansub.bridge import ResourceRegistry
+    waveform, _ = ResourceRegistry.instance().decode_audio(path, sample_rate=bundle.sample_rate)
     return waveform
 
 
