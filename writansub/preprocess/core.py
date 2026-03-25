@@ -180,7 +180,7 @@ def _chunk_inference(
         mixture.shape[0], mixture.shape[1], chunk_size,
         dtype=mixture.dtype, device=device,
     )
-    num_chunks = (padded.shape[-1] - chunk_size) // hop + 2
+    num_chunks = (padded.shape[-1] - chunk_size) // hop + 1
 
     accumulator = torch.zeros(
         mixture.shape[0], n_tracks, mixture.shape[1], padded.shape[-1],
@@ -328,13 +328,24 @@ def separate_speakers_tfgridnet(
     return spk1, spk2
 
 
+_silero_cache: tuple[Any, Any] | None = None
+
+
+def _get_silero_vad() -> tuple[Any, Any]:
+    """获取 Silero VAD 模型和工具函数，全局缓存只加载一次。"""
+    global _silero_cache
+    if _silero_cache is None:
+        model, utils = torch.hub.load(
+            repo_or_dir="snakers4/silero-vad",
+            model="silero_vad",
+            trust_repo=True,
+        )
+        _silero_cache = (model, utils[0])
+    return _silero_cache
+
+
 def _run_silero_vad(waveform: torch.Tensor, sr: int = 16000, threshold: float = 0.5) -> list[TimeSpan]:
-    model, utils = torch.hub.load(
-        repo_or_dir="snakers4/silero-vad",
-        model="silero_vad",
-        trust_repo=True,
-    )
-    get_speech_timestamps = utils[0]
+    model, get_speech_timestamps = _get_silero_vad()
 
     wav = waveform.squeeze(0)
     if sr != 16000:

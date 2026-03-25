@@ -1,4 +1,6 @@
-"""语音合成页：多模型选择（MMS_FA / Style-Bert-VITS2）"""
+"""[废案模块] 语音合成页：多模型选择（MMS_FA / Style-Bert-VITS2）
+未接入主程序，依赖的 TTS_MODELS / load_tts_config / register_thread 等尚未实现。
+"""
 
 import os
 import sys

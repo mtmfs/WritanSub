@@ -240,7 +240,6 @@ class WhisperTab(StateMixin, QWidget):
                 condition_on_previous_text=cond_prev, model_size=model_size,
             )
 
-            # 生成 review 文件
             if wc_threshold > 0.0:
                 srt_content, ass_content, low_count, total_words = generate_review(
                     subs, word_data, wc_threshold,
@@ -250,7 +249,6 @@ class WhisperTab(StateMixin, QWidget):
                     write_review_files(base, srt_content, ass_content)
                     self._log.log(f"低置信词 {low_count}/{total_words}，已生成标记版")
 
-            # 直接写到用户指定路径
             write_srt(subs, output)
             self._progress.update_progress(1.0, "识别完成")
         except Exception as e:

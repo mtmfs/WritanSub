@@ -77,6 +77,7 @@ class ResourceRegistry:
 
     def unload_model(self, handle: int) -> None:
         self._native.unload_model(handle)
+        self._model_handles = {k: v for k, v in self._model_handles.items() if v != handle}
         gc.collect()
 
     def run_subprocess(self, cmd: list[str], timeout: float = 600) -> subprocess.CompletedProcess:

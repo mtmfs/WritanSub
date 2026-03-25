@@ -97,7 +97,7 @@ TRANSLATE_DEFAULTS: dict[str, Any] = {
 def load_translate_config() -> dict[str, Any]:
     """加载翻译配置"""
     raw = _load_json(TRANSLATE_CONFIG_PATH)
-    return TRANSLATE_DEFAULTS | {k: raw[k] for k, v in TRANSLATE_DEFAULTS.items() if k in raw}
+    return TRANSLATE_DEFAULTS | {k: raw[k] for k in TRANSLATE_DEFAULTS if k in raw}
 
 
 def save_translate_config(values: dict[str, Any]) -> None:

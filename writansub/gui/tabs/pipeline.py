@@ -58,9 +58,10 @@ class PipelineTab(StateMixin, QWidget):
     # ── UI 构建 ──
 
     def _setup_ui(self):
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(10, 10, 10, 10)
-        self.layout.setSpacing(10)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        self._main_layout = layout
 
         self._build_file_section()
         self._build_config_section()
@@ -91,7 +92,7 @@ class PipelineTab(StateMixin, QWidget):
         file_btns.addStretch()
         file_layout.addLayout(file_btns)
 
-        self.layout.addWidget(self.card_file)
+        self._main_layout.addWidget(self.card_file)
 
     def _build_config_section(self):
         """2. 中间三列配置区"""
@@ -166,14 +167,14 @@ class PipelineTab(StateMixin, QWidget):
         ret_layout.addStretch()
         config_layout.addWidget(self.card_retention)
 
-        self.layout.addLayout(config_layout)
+        self._main_layout.addLayout(config_layout)
 
     def _build_pp_section(self):
         """3. 后处理参数 (横向排列)"""
         self.card_pp = QGroupBox("后处理参数")
         QGridLayout(self.card_pp)
         self._pp_vars = build_params_grid(self.card_pp, self._PP_KEYS)
-        self.layout.addWidget(self.card_pp)
+        self._main_layout.addWidget(self.card_pp)
 
     def _build_action_section(self):
         """4. 底部控制区"""
@@ -193,8 +194,8 @@ class PipelineTab(StateMixin, QWidget):
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
 
-        self.layout.addLayout(action_layout)
-        self.layout.addSpacing(10)
+        self._main_layout.addLayout(action_layout)
+        self._main_layout.addSpacing(10)
 
     def _build_log_section(self):
         """5. 可折叠日志区"""
@@ -204,11 +205,11 @@ class PipelineTab(StateMixin, QWidget):
         self._btn_toggle_log.clicked.connect(self._toggle_log)
         toggle_layout.addWidget(self._btn_toggle_log)
         toggle_layout.addStretch()
-        self.layout.addLayout(toggle_layout)
+        self._main_layout.addLayout(toggle_layout)
 
         self._log = LogWidget()
         self._log.setVisible(False)
-        self.layout.addWidget(self._log, 1)
+        self._main_layout.addWidget(self._log, 1)
 
     # ── 状态保存 / 恢复 ──
 
@@ -400,7 +401,6 @@ class PipelineTab(StateMixin, QWidget):
 
         num_phases = 2 + (1 if translate_cfg else 0) + (1 if tiger_mode else 0)
         phase_offset = 1 if tiger_mode else 0
-        reg = ResourceRegistry.instance()
         total = len(media_files)
         log_emit = self._signals.log_requested.emit
         prog_emit = self._signals.progress_requested.emit

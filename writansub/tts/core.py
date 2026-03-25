@@ -1,4 +1,6 @@
-"""语音合成：多模型分派（MMS_FA 对齐 / Style-Bert-VITS2 TTS）"""
+"""[废案模块] 语音合成：多模型分派（MMS_FA 对齐 / Style-Bert-VITS2 TTS）
+未接入主程序，配套 GUI (tts.py) 同为废案。
+"""
 
 import json
 import os
