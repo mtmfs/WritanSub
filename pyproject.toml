@@ -26,6 +26,7 @@ dependencies = [
 
 [project.scripts]
 writansub = "writansub.gui.app:main"
+writansub-cli = "writansub.cli:main"
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }

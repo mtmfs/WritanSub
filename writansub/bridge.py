@@ -14,6 +14,10 @@ import writansub_native
 log = logging.getLogger(__name__)
 
 
+class CancelledError(Exception):
+    """任务被用户取消时抛出。"""
+
+
 @functools.lru_cache(maxsize=1)
 def _get_ffmpeg() -> str:
     """查找 ffmpeg 可执行路径（系统优先，imageio-ffmpeg 兜底），结果缓存。"""
@@ -45,6 +49,37 @@ class ResourceRegistry:
         self._native = writansub_native.ResourceRegistry
         self._model_handles: dict[tuple[str, str], int] = {}
         self.cancelled = False
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # 初始为非暂停状态
+
+    # ── 暂停 / 取消 ─────────────────────────────────────
+
+    def pause(self) -> None:
+        """请求暂停：后台线程在下一个 checkpoint 处阻塞。"""
+        self._pause_event.clear()
+
+    def resume(self) -> None:
+        """恢复执行。"""
+        self._pause_event.set()
+
+    @property
+    def paused(self) -> bool:
+        return not self._pause_event.is_set()
+
+    def reset_controls(self) -> None:
+        """任务开始前重置取消/暂停状态。"""
+        self.cancelled = False
+        self._pause_event.set()
+
+    def checkpoint(self) -> None:
+        """在后台线程的循环中调用：先等暂停恢复，再检查取消。
+
+        Raises:
+            CancelledError: 用户取消时抛出。
+        """
+        self._pause_event.wait()
+        if self.cancelled:
+            raise CancelledError("任务已取消")
 
     def register_model(self, name: str, obj: Any, device: str = "") -> int:
         handle = self._native.register_model(obj)
@@ -139,4 +174,5 @@ class ResourceRegistry:
         """物理级清理：取消所有任务 + 终止 Rust 接管的子进程"""
         log.info("Native Shutdown Initiated...")
         self.cancelled = True
+        self._pause_event.set()  # 解除暂停，让线程能退出
         self._native.shutdown()

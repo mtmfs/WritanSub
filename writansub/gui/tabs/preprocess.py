@@ -12,6 +12,7 @@ from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.types import MEDIA_FILETYPES, MSS_MODELS, SS_MODELS
 from writansub.config import load_gui_state
+from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, StateMixin
 
 
@@ -126,6 +127,17 @@ class TigerTab(StateMixin, QWidget):
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
         action_layout.addStretch()
+
+        self._pause_btn = QPushButton("暂停")
+        self._pause_btn.setEnabled(False)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        action_layout.addWidget(self._pause_btn)
+
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._cancel)
+        action_layout.addWidget(self._cancel_btn)
+
         self._start_btn = QPushButton("开始处理")
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
@@ -212,6 +224,30 @@ class TigerTab(StateMixin, QWidget):
 
     # ── 执行 ──
 
+    def _set_buttons_state(self, running: bool):
+        self._start_btn.setEnabled(not running)
+        self._cancel_btn.setEnabled(running)
+        self._pause_btn.setEnabled(running)
+        if not running:
+            self._pause_btn.setText("暂停")
+
+    def _toggle_pause(self):
+        reg = ResourceRegistry.instance()
+        if reg.paused:
+            reg.resume()
+            self._pause_btn.setText("暂停")
+            self._log.log("已恢复执行")
+        else:
+            reg.pause()
+            self._pause_btn.setText("继续")
+            self._log.log("已暂停，点击「继续」恢复")
+
+    def _cancel(self):
+        reg = ResourceRegistry.instance()
+        reg.cancelled = True
+        reg.resume()
+        self._log.log("正在取消...")
+
     def _start(self):
         if not self._media_files:
             self._log.log("请先添加媒体文件")
@@ -221,7 +257,8 @@ class TigerTab(StateMixin, QWidget):
             return
 
         self._save_now()
-        self._start_btn.setEnabled(False)
+        ResourceRegistry.instance().reset_controls()
+        self._set_buttons_state(True)
         self._progress.reset()
         self._log.clear_log()
 
@@ -282,10 +319,12 @@ class TigerTab(StateMixin, QWidget):
             log("全部处理完成")
             progress(1.0, "完成")
 
+        except CancelledError:
+            log("处理已取消")
         except Exception as e:
             log(f"处理出错: {e}")
         finally:
             self._signals.finished.emit()
 
     def _on_finished(self):
-        self._start_btn.setEnabled(True)
+        self._set_buttons_state(False)

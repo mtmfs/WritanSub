@@ -6,14 +6,15 @@ from dataclasses import replace
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
-    QLineEdit, QPushButton, QLabel, QFileDialog, QSplitter,
+    QLineEdit, QPushButton, QLabel, QCheckBox, QFileDialog, QSplitter,
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
 from writansub.types import TRANSLATE_TARGETS
-from writansub.subtitle.srt_io import parse_srt, write_srt
+from writansub.subtitle.srt_io import parse_srt, write_srt, merge_bilingual
 from writansub.translate.core import translate_subs
 from writansub.config import load_translate_config, save_translate_config, load_gui_state
+from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, StateMixin
 
 class _TranslateSignals(QObject):
@@ -104,6 +105,10 @@ class TranslateTab(StateMixin, QWidget):
 
         cfg_layout.setColumnStretch(1, 1)
 
+        self._chk_bilingual = QCheckBox("双语输出（原文 + 译文）")
+        self._chk_bilingual.setToolTip("勾选后输出双语字幕，每条包含原文和译文两行\n不勾选则只输出译文")
+        settings_layout.addWidget(self._chk_bilingual)
+
         settings_layout.addStretch()
 
         splitter.addWidget(top_widget)
@@ -119,6 +124,17 @@ class TranslateTab(StateMixin, QWidget):
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
         action_layout.addStretch()
+
+        self._pause_btn = QPushButton("暂停")
+        self._pause_btn.setEnabled(False)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        action_layout.addWidget(self._pause_btn)
+
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._cancel)
+        action_layout.addWidget(self._cancel_btn)
+
         self._start_btn = QPushButton("开始翻译")
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
@@ -142,6 +158,7 @@ class TranslateTab(StateMixin, QWidget):
         self._model_edit.editingFinished.connect(self._auto_save)
         self._base_edit.editingFinished.connect(self._auto_save)
         self._key_edit.editingFinished.connect(self._auto_save)
+        self._chk_bilingual.stateChanged.connect(self._auto_save)
 
     def _get_translate_config(self) -> dict:
         """当前翻译配置（用于保存和执行）"""
@@ -162,6 +179,7 @@ class TranslateTab(StateMixin, QWidget):
             "translate.model": self._model_edit.text(),
             "translate.api_base": self._base_edit.text(),
             "translate.api_key": self._key_edit.text(),
+            "translate.bilingual": self._chk_bilingual.isChecked(),
         }
 
     def restore_state(self, state: dict):
@@ -177,6 +195,8 @@ class TranslateTab(StateMixin, QWidget):
             self._base_edit.setText(state["translate.api_base"])
         if "translate.api_key" in state:
             self._key_edit.setText(state["translate.api_key"])
+        if "translate.bilingual" in state:
+            self._chk_bilingual.setChecked(state["translate.bilingual"])
 
     def _browse_srt(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -198,8 +218,32 @@ class TranslateTab(StateMixin, QWidget):
             base = os.path.splitext(srt)[0]
             self._out_edit.setText(f"{base}_translated.srt")
 
+    def _set_buttons_state(self, running: bool):
+        self._start_btn.setEnabled(not running)
+        self._cancel_btn.setEnabled(running)
+        self._pause_btn.setEnabled(running)
+        if not running:
+            self._pause_btn.setText("暂停")
+
     def _on_finished(self):
-        self._start_btn.setEnabled(True)
+        self._set_buttons_state(False)
+
+    def _toggle_pause(self):
+        reg = ResourceRegistry.instance()
+        if reg.paused:
+            reg.resume()
+            self._pause_btn.setText("暂停")
+            self._log.log("已恢复执行")
+        else:
+            reg.pause()
+            self._pause_btn.setText("继续")
+            self._log.log("已暂停，点击「继续」恢复")
+
+    def _cancel(self):
+        reg = ResourceRegistry.instance()
+        reg.cancelled = True
+        reg.resume()
+        self._log.log("正在取消...")
 
     def _start(self):
         srt = self._srt_edit.text().strip()
@@ -216,18 +260,21 @@ class TranslateTab(StateMixin, QWidget):
         save_translate_config(cfg)
         self._save_now()
 
-        self._start_btn.setEnabled(False)
+        ResourceRegistry.instance().reset_controls()
+        self._set_buttons_state(True)
         self._log.clear_log()
         self._progress.reset()
 
+        bilingual = self._chk_bilingual.isChecked()
+
         thread = threading.Thread(
             target=self._run_translate,
-            args=(srt, output, cfg),
+            args=(srt, output, cfg, bilingual),
             daemon=True,
         )
         thread.start()
 
-    def _run_translate(self, srt: str, output: str, cfg: dict):
+    def _run_translate(self, srt: str, output: str, cfg: dict, bilingual: bool):
         try:
             subs = parse_srt(srt)
             translate_subs(
@@ -240,13 +287,14 @@ class TranslateTab(StateMixin, QWidget):
                 progress_callback=self._progress.update_progress,
             )
 
-            # 用 translated 字段替换 text 用于输出
-            output_subs = [
-                replace(s, text=s.translated or s.text)
-                for s in subs
-            ]
+            if bilingual:
+                output_subs = merge_bilingual(subs)
+            else:
+                output_subs = [replace(s, text=s.translated or s.text) for s in subs]
             write_srt(output_subs, output)
             self._progress.update_progress(1.0, "翻译完成")
+        except CancelledError:
+            self._log.log("翻译已取消")
         except Exception as e:
             self._log.log(f"出错: {e}")
         finally:

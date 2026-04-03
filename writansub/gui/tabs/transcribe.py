@@ -15,6 +15,7 @@ from writansub.transcribe.core import transcribe
 from writansub.subtitle.review import generate_review, write_review_files
 from writansub.subtitle.srt_io import write_srt
 from writansub.config import PARAM_DEFS, load_gui_state
+from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin
 
 
@@ -116,6 +117,14 @@ class WhisperTab(StateMixin, QWidget):
             "关闭可防止幻觉扩散。"
         )
         param_layout.addWidget(self._chk_cond_prev)
+
+        self._chk_vad = QCheckBox("跳过静音")
+        self._chk_vad.setChecked(False)
+        self._chk_vad.setToolTip(
+            "启用 Silero VAD 自动跳过静音段，\n"
+            "可显著加速长音频的识别。"
+        )
+        param_layout.addWidget(self._chk_vad)
         param_layout.addStretch()
 
         settings_layout.addStretch()
@@ -133,6 +142,17 @@ class WhisperTab(StateMixin, QWidget):
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
         action_layout.addStretch()
+
+        self._pause_btn = QPushButton("暂停")
+        self._pause_btn.setEnabled(False)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        action_layout.addWidget(self._pause_btn)
+
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._cancel)
+        action_layout.addWidget(self._cancel_btn)
+
         self._start_btn = QPushButton("开始识别")
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
@@ -156,6 +176,7 @@ class WhisperTab(StateMixin, QWidget):
         self._model_combo.currentTextChanged.connect(self._auto_save)
         self._device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
+        self._chk_vad.stateChanged.connect(self._auto_save)
 
     def save_state(self) -> dict:
         return {
@@ -165,6 +186,7 @@ class WhisperTab(StateMixin, QWidget):
             "whisper.model": self._model_combo.currentName(),
             "whisper.device": self._device_combo.currentText(),
             "whisper.cond_prev": self._chk_cond_prev.isChecked(),
+            "whisper.vad_filter": self._chk_vad.isChecked(),
         }
 
     def restore_state(self, state: dict):
@@ -180,6 +202,8 @@ class WhisperTab(StateMixin, QWidget):
             self._device_combo.setCurrentText(state["whisper.device"])
         if "whisper.cond_prev" in state:
             self._chk_cond_prev.setChecked(state["whisper.cond_prev"])
+        if "whisper.vad_filter" in state:
+            self._chk_vad.setChecked(state["whisper.vad_filter"])
 
     def _browse_media(self):
         filter_str = ";;".join(f"{label} ({exts})" for label, exts in MEDIA_FILETYPES)
@@ -198,8 +222,32 @@ class WhisperTab(StateMixin, QWidget):
         if media and not self._output_edit.text().strip():
             self._output_edit.setText(os.path.splitext(media)[0] + ".srt")
 
+    def _set_buttons_state(self, running: bool):
+        self._start_btn.setEnabled(not running)
+        self._cancel_btn.setEnabled(running)
+        self._pause_btn.setEnabled(running)
+        if not running:
+            self._pause_btn.setText("暂停")
+
     def _on_finished(self):
-        self._start_btn.setEnabled(True)
+        self._set_buttons_state(False)
+
+    def _toggle_pause(self):
+        reg = ResourceRegistry.instance()
+        if reg.paused:
+            reg.resume()
+            self._pause_btn.setText("暂停")
+            self._log.log("已恢复执行")
+        else:
+            reg.pause()
+            self._pause_btn.setText("继续")
+            self._log.log("已暂停，点击「继续」恢复")
+
+    def _cancel(self):
+        reg = ResourceRegistry.instance()
+        reg.cancelled = True
+        reg.resume()
+        self._log.log("正在取消...")
 
     def _start(self):
         media = self._media_edit.text().strip()
@@ -213,7 +261,8 @@ class WhisperTab(StateMixin, QWidget):
             self._output_edit.setText(output)
 
         self._save_now()
-        self._start_btn.setEnabled(False)
+        ResourceRegistry.instance().reset_controls()
+        self._set_buttons_state(True)
         self._log.clear_log()
         self._progress.reset()
 
@@ -222,22 +271,24 @@ class WhisperTab(StateMixin, QWidget):
         device = self._device_combo.currentText()
         wc = self._wc_spin.value()
         cond_prev = self._chk_cond_prev.isChecked()
+        vad_filter = self._chk_vad.isChecked()
 
         thread = threading.Thread(
             target=self._run_whisper,
-            args=(media, output, lang, model_size, device, wc, cond_prev),
+            args=(media, output, lang, model_size, device, wc, cond_prev, vad_filter),
             daemon=True,
         )
         thread.start()
 
     def _run_whisper(self, media: str, output: str, lang: str,
                      model_size: str, device: str, wc_threshold: float,
-                     cond_prev: bool = True):
+                     cond_prev: bool = True, vad_filter: bool = False):
         try:
             subs, word_data = transcribe(
                 media, lang=lang, device=device, log_callback=self._log.log,
                 progress_callback=self._progress.update_progress,
                 condition_on_previous_text=cond_prev, model_size=model_size,
+                vad_filter=vad_filter,
             )
 
             if wc_threshold > 0.0:
@@ -251,6 +302,8 @@ class WhisperTab(StateMixin, QWidget):
 
             write_srt(subs, output)
             self._progress.update_progress(1.0, "识别完成")
+        except CancelledError:
+            self._log.log("识别已取消")
         except Exception as e:
             self._log.log(f"出错: {e}")
         finally:

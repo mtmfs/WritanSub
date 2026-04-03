@@ -37,9 +37,10 @@ def translate_subs(
         同一 subs 列表（translated 字段已填充）
     """
     from openai import OpenAI
+    from writansub.bridge import ResourceRegistry
 
     _log = log_callback or (lambda msg: None)
-    _cancelled = cancelled or (lambda: False)
+    reg = ResourceRegistry.instance()
 
     client = OpenAI(base_url=api_base, api_key=api_key)
     total = len(subs)
@@ -50,8 +51,7 @@ def translate_subs(
     fail_count = 0
 
     for batch_start in range(0, total, batch_size):
-        if _cancelled():
-            break
+        reg.checkpoint()  # 暂停 / 取消
 
         batch_end = min(batch_start + batch_size, total)
         batch = subs[batch_start:batch_end]

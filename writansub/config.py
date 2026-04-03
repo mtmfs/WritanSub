@@ -16,6 +16,7 @@ PP_DEFAULTS: dict[str, float] = {
     "word_conf_threshold": 0.50,
     "align_conf_threshold": 0.50,
     "min_duration": 0.30,
+    "pad_sec": 0.50,
 }
 
 PARAM_DEFS: dict[str, dict[str, Any]] = {
@@ -47,6 +48,10 @@ PARAM_DEFS: dict[str, dict[str, Any]] = {
     "min_duration": {
         "label": "最小时长(s)", "from": 0.0, "to": 5.0, "inc": 0.01,
         "tip": "字幕时长不足此值时自动向前合并到上一条\n设为 0 可禁用",
+    },
+    "pad_sec": {
+        "label": "对齐窗口余量(s)", "from": 0.0, "to": 5.0, "inc": 0.05,
+        "tip": "对齐时在字幕时间窗两侧各扩展的余量\n增大可提高对齐成功率，减小可提高精度",
     },
 }
 

@@ -15,7 +15,7 @@ from writansub.align.core import (
     init_qwen3_model, run_qwen3_alignment,
 )
 from writansub.config import load_gui_state
-from writansub.bridge import ResourceRegistry
+from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import (
     LogWidget, ProgressWidget, build_params_grid,
     NoScrollComboBox, GroupedComboBox, StateMixin,
@@ -32,7 +32,7 @@ class AlignmentTab(StateMixin, QWidget):
 
     _PP_KEYS = [
         "extend_end", "extend_start", "gap_threshold",
-        "min_gap", "min_duration",
+        "min_gap", "min_duration", "pad_sec",
     ]
 
     def __init__(self, parent=None):
@@ -134,6 +134,17 @@ class AlignmentTab(StateMixin, QWidget):
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(12, 6, 12, 6)
         action_layout.addStretch()
+
+        self._pause_btn = QPushButton("暂停")
+        self._pause_btn.setEnabled(False)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        action_layout.addWidget(self._pause_btn)
+
+        self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._cancel)
+        action_layout.addWidget(self._cancel_btn)
+
         self._start_btn = QPushButton("开始对齐")
         self._start_btn.clicked.connect(self._start)
         action_layout.addWidget(self._start_btn)
@@ -208,8 +219,32 @@ class AlignmentTab(StateMixin, QWidget):
             base = srt.rsplit(".", 1)[0]
             self._out_edit.setText(f"{base}_aligned.srt")
 
+    def _set_buttons_state(self, running: bool):
+        self._start_btn.setEnabled(not running)
+        self._cancel_btn.setEnabled(running)
+        self._pause_btn.setEnabled(running)
+        if not running:
+            self._pause_btn.setText("暂停")
+
     def _on_finished(self):
-        self._start_btn.setEnabled(True)
+        self._set_buttons_state(False)
+
+    def _toggle_pause(self):
+        reg = ResourceRegistry.instance()
+        if reg.paused:
+            reg.resume()
+            self._pause_btn.setText("暂停")
+            self._log.log("已恢复执行")
+        else:
+            reg.pause()
+            self._pause_btn.setText("继续")
+            self._log.log("已暂停，点击「继续」恢复")
+
+    def _cancel(self):
+        reg = ResourceRegistry.instance()
+        reg.cancelled = True
+        reg.resume()
+        self._log.log("正在取消...")
 
     def _start(self):
         audio = self._audio_edit.text().strip()
@@ -228,7 +263,8 @@ class AlignmentTab(StateMixin, QWidget):
             self._out_edit.setText(output)
 
         self._save_now()
-        self._start_btn.setEnabled(False)
+        ResourceRegistry.instance().reset_controls()
+        self._set_buttons_state(True)
         self._log.clear_log()
         self._progress.reset()
 
@@ -264,13 +300,14 @@ class AlignmentTab(StateMixin, QWidget):
             self._log.log(f"字幕条数: {len(subs)}")
 
             self._progress.update_progress(0.1, "加载模型...")
+            pad_sec = pp.pop("pad_sec", 0.5)
 
             if align_model == "qwen3-fa-0.6b":
                 qwen3_model = init_qwen3_model(device)
                 model_handle = reg.register_model("qwen3_fa", qwen3_model, device)
 
                 aligned = run_qwen3_alignment(
-                    waveform, subs, device=device,
+                    waveform, subs, device=device, pad_sec=pad_sec,
                     progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
                     model=qwen3_model, lang=lang,
                     log_callback=self._log.log,
@@ -280,7 +317,7 @@ class AlignmentTab(StateMixin, QWidget):
                 model_handle = reg.register_model("mms_fa", model_bundle, device)
 
                 aligned = run_alignment(
-                    waveform, subs, device=device,
+                    waveform, subs, device=device, pad_sec=pad_sec,
                     progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
                     model_bundle=model_bundle,
                     log_callback=self._log.log,
@@ -293,6 +330,8 @@ class AlignmentTab(StateMixin, QWidget):
             write_srt(final, output)
             self._progress.update_progress(1.0, "对齐完成")
             self._log.log(f"完成! 输出: {output}")
+        except CancelledError:
+            self._log.log("对齐已取消")
         except Exception as e:
             self._log.log(f"出错: {e}")
         finally:

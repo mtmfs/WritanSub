@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QComboBox, QStyledItemDelegate,
 )
 from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtGui import QPalette
 
 from writansub.config import (
     PP_DEFAULTS, PARAM_DEFS,
@@ -184,7 +185,7 @@ class _InfoDelegate(QStyledItemDelegate):
             return
         painter.save()
         rect = option.rect.adjusted(0, 0, -8, 0)
-        painter.setPen(option.palette.color(option.palette.Text))
+        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
         painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, info)
         painter.restore()
 

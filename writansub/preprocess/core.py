@@ -141,6 +141,7 @@ def separate_dnr(
     results = []
     try:
         for i, (sub_model, name, idx) in enumerate(tracks):
+            reg.checkpoint()  # 暂停 / 取消
             _log(f"正在分离 {name} ({i + 1}/3) ...")
             _progress(i / 3.0, f"正在分离 {name}...")
             track = model.wav_chunk_inference(sub_model, mixture)[idx]
@@ -187,7 +188,10 @@ def _chunk_inference(
         device=device,
     )
 
+    reg = ResourceRegistry.instance()
+
     for i in range(num_chunks):
+        reg.checkpoint()  # 暂停 / 取消
         chunk = padded[:, :, i * hop:i * hop + chunk_size]
         curr_len = chunk.shape[-1]
         if curr_len < chunk_size:
@@ -414,10 +418,12 @@ def run_dnr_batch(
 ) -> dict:
     _log = log_callback or (lambda msg: None)
 
+    reg = ResourceRegistry.instance()
     results = {}
     total = len(media_files)
 
     for idx, media in enumerate(media_files):
+        reg.checkpoint()  # 暂停 / 取消
         file_info = f"[{idx + 1}/{total}]"
         _file_progress = _make_file_progress(idx, total, progress_callback)
 
@@ -459,10 +465,12 @@ def run_speech_batch(
 ) -> None:
     _log = log_callback or (lambda msg: None)
 
+    reg = ResourceRegistry.instance()
     media_list = list(dnr_results.keys())
     total = len(media_list)
 
     for idx, media in enumerate(media_list):
+        reg.checkpoint()  # 暂停 / 取消
         data = dnr_results[media]
         _file_progress = _make_file_progress(idx, total, progress_callback)
 

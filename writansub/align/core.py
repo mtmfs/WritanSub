@@ -186,7 +186,13 @@ def _align_one_qwen3(chunk, sub, qwen3_model, sr, qwen_lang):
         )
         segments = align_results[0] if align_results else []
         if segments:
-            return (segments[0].start_time, segments[-1].end_time, 1.0)
+            aligned_dur = segments[-1].end_time - segments[0].start_time
+            original_dur = sub.end - sub.start
+            if aligned_dur > 0 and original_dur > 0:
+                score = min(aligned_dur, original_dur) / max(aligned_dur, original_dur)
+            else:
+                score = 0.0
+            return (segments[0].start_time, segments[-1].end_time, score)
     except Exception:
         pass
     return None
@@ -225,8 +231,10 @@ def run_alignment(
             model_bundle = init_model(device)
         align_fn = lambda chunk, sub: _align_one_mms(chunk, sub, model_bundle, device, sr)
 
+    from writansub.bridge import ResourceRegistry
+
     total_duration = waveform.shape[1] / sr
-    _cancelled = cancelled or (lambda: False)
+    reg = ResourceRegistry.instance()
     _log = log_callback or (lambda msg: None)
 
     results = []
@@ -235,8 +243,7 @@ def run_alignment(
     total_subs = len(subs)
 
     for i, sub in enumerate(subs):
-        if _cancelled():
-            break
+        reg.checkpoint()  # 暂停 / 取消
 
         if progress_callback:
             progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")

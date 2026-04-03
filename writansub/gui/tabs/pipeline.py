@@ -9,13 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, QObject
 
 from writansub.types import LANGUAGES, WHISPER_MODELS, ALIGN_MODELS, MSS_MODELS, SS_MODELS
-from writansub.subtitle.srt_io import write_srt, populate_romaji, merge_bilingual
-from writansub.transcribe.core import transcribe
-from writansub.subtitle.review import generate_review, write_review_files, mark_low_align_in_review
-from writansub.align.core import load_audio, run_alignment, post_process, init_model
-from writansub.translate.core import translate_subs
 from writansub.config import load_gui_state, load_translate_config
-from writansub.bridge import ResourceRegistry
+from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import (
     LogWidget, ProgressWidget, build_params_grid,
     NoScrollComboBox, GroupedComboBox, StateMixin,
@@ -36,7 +31,7 @@ class PipelineTab(StateMixin, QWidget):
     _PP_KEYS = [
         "extend_end", "extend_start", "gap_threshold",
         "min_gap", "word_conf_threshold", "align_conf_threshold",
-        "min_duration",
+        "min_duration", "pad_sec",
     ]
 
     def __init__(self, parent=None):
@@ -121,7 +116,10 @@ class PipelineTab(StateMixin, QWidget):
         self._align_model_combo.setCurrentName("mms_fa")
         basic_layout.addWidget(self._align_model_combo, 3, 1)
         self._chk_cond_prev = QCheckBox("启用前文调优")
-        basic_layout.addWidget(self._chk_cond_prev, 4, 0, 1, 2)
+        basic_layout.addWidget(self._chk_cond_prev, 4, 0)
+        self._chk_vad = QCheckBox("跳过静音 (VAD)")
+        self._chk_vad.setToolTip("启用 Silero VAD 跳过静音段，加速识别\n（启用 TIGER 预处理时建议关闭）")
+        basic_layout.addWidget(self._chk_vad, 4, 1)
         config_layout.addWidget(self.card_basic)
 
         # 预处理配置
@@ -185,6 +183,11 @@ class PipelineTab(StateMixin, QWidget):
         self._progress = ProgressWidget()
         action_layout.addWidget(self._progress, 1)
 
+        self._pause_btn = QPushButton("暂停")
+        self._pause_btn.setEnabled(False)
+        self._pause_btn.clicked.connect(self._toggle_pause)
+        action_layout.addWidget(self._pause_btn)
+
         self._cancel_btn = QPushButton("取消任务")
         self._cancel_btn.setEnabled(False)
         self._cancel_btn.clicked.connect(self._cancel)
@@ -218,6 +221,7 @@ class PipelineTab(StateMixin, QWidget):
         self._model_combo.currentTextChanged.connect(self._auto_save)
         self._whisper_device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
+        self._chk_vad.stateChanged.connect(self._auto_save)
         self._align_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_whisper.stateChanged.connect(self._auto_save)
         self._chk_force_align.stateChanged.connect(self._auto_save)
@@ -235,6 +239,7 @@ class PipelineTab(StateMixin, QWidget):
             "pipeline.whisper_model": self._model_combo.currentName(),
             "pipeline.whisper_device": self._whisper_device_combo.currentText(),
             "pipeline.cond_prev": self._chk_cond_prev.isChecked(),
+            "pipeline.vad_filter": self._chk_vad.isChecked(),
             "pipeline.align_model": self._align_model_combo.currentName(),
             "pipeline.retain_whisper": self._chk_whisper.isChecked(),
             "pipeline.retain_align": self._chk_force_align.isChecked(),
@@ -257,6 +262,8 @@ class PipelineTab(StateMixin, QWidget):
             self._whisper_device_combo.setCurrentText(state["pipeline.whisper_device"])
         if "pipeline.cond_prev" in state:
             self._chk_cond_prev.setChecked(state["pipeline.cond_prev"])
+        if "pipeline.vad_filter" in state:
+            self._chk_vad.setChecked(state["pipeline.vad_filter"])
         if "pipeline.align_model" in state:
             self._align_model_combo.setCurrentName(state["pipeline.align_model"])
         if "pipeline.retain_whisper" in state:
@@ -325,13 +332,29 @@ class PipelineTab(StateMixin, QWidget):
     def _set_buttons_state(self, running: bool):
         self._start_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
+        self._pause_btn.setEnabled(running)
+        if not running:
+            self._pause_btn.setText("暂停")
 
     def _on_finished(self):
         self._running = False
         self._set_buttons_state(False)
 
+    def _toggle_pause(self):
+        reg = ResourceRegistry.instance()
+        if reg.paused:
+            reg.resume()
+            self._pause_btn.setText("暂停")
+            self._signals.log_requested.emit("已恢复执行")
+        else:
+            reg.pause()
+            self._pause_btn.setText("继续")
+            self._signals.log_requested.emit("已暂停，点击「继续」恢复")
+
     def _cancel(self):
-        ResourceRegistry.instance().cancelled = True
+        reg = ResourceRegistry.instance()
+        reg.cancelled = True
+        reg.resume()  # 解除暂停让线程能退出
         self._signals.log_requested.emit("正在取消任务...")
 
     # ── 流水线启动 ──
@@ -350,7 +373,7 @@ class PipelineTab(StateMixin, QWidget):
 
         self._save_now()
         self._running = True
-        ResourceRegistry.instance().cancelled = False
+        ResourceRegistry.instance().reset_controls()
         self._set_buttons_state(True)
         self._log.clear_log()
         self._progress.reset()
@@ -380,6 +403,7 @@ class PipelineTab(StateMixin, QWidget):
                 self._mss_model_combo.currentName(),
                 self._ss_model_combo.currentName(),
                 self._chk_tiger_save.isChecked(),
+                self._chk_vad.isChecked(),
             ),
             daemon=True,
         )
@@ -389,296 +413,50 @@ class PipelineTab(StateMixin, QWidget):
 
     def _run_pipeline(self, media_files, lang, device, model_size, align_model,
                       retention, pp, cond_prev, translate_cfg, tiger_mode,
-                      mss_model, ss_model, tiger_save):
-        import torch
+                      mss_model, ss_model, tiger_save, vad_filter):
+        from writansub.pipeline.runner import PipelineConfig, run_pipeline
 
-        reg = ResourceRegistry.instance()
-        _cancelled = lambda: reg.cancelled
-
-        wc_threshold = pp.get("word_conf_threshold", 0.50)
-        ac_threshold = pp.get("align_conf_threshold", 0.50)
-        pp = {k: v for k, v in pp.items() if k not in ("word_conf_threshold", "align_conf_threshold")}
-
-        num_phases = 2 + (1 if translate_cfg else 0) + (1 if tiger_mode else 0)
-        phase_offset = 1 if tiger_mode else 0
-        total = len(media_files)
         log_emit = self._signals.log_requested.emit
         prog_emit = self._signals.progress_requested.emit
 
+        cfg = PipelineConfig(
+            media_files=media_files,
+            lang=lang,
+            device=device,
+            whisper_model=model_size,
+            align_model=align_model,
+            condition_on_prev=cond_prev,
+            vad_filter=vad_filter,
+            tiger_mode=tiger_mode,
+            mss_model=mss_model,
+            ss_model=ss_model,
+            save_intermediate=tiger_save,
+            keep_whisper_srt=retention.get("whisper", False),
+            keep_aligned_srt=retention.get("force_align", False),
+            generate_review=retention.get("review", False),
+            translate=bool(translate_cfg),
+            extend_end=pp.get("extend_end", 0.30),
+            extend_start=pp.get("extend_start", 0.00),
+            gap_threshold=pp.get("gap_threshold", 0.50),
+            min_gap=pp.get("min_gap", 0.30),
+            word_conf_threshold=pp.get("word_conf_threshold", 0.50),
+            align_conf_threshold=pp.get("align_conf_threshold", 0.50),
+            min_duration=pp.get("min_duration", 0.30),
+            pad_sec=pp.get("pad_sec", 0.50),
+        )
+
+        if translate_cfg:
+            cfg.api_base = translate_cfg.get("api_base", cfg.api_base)
+            cfg.api_key = translate_cfg.get("api_key", cfg.api_key)
+            cfg.llm_model = translate_cfg.get("model", cfg.llm_model)
+            cfg.target_lang = translate_cfg.get("target_lang", cfg.target_lang)
+            cfg.batch_size = translate_cfg.get("batch_size", cfg.batch_size)
+
         try:
-            sub_results, word_results, tiger_results = {}, {}, {}
-
-            # Phase: TIGER 增强
-            if tiger_mode and not _cancelled():
-                tiger_results = self._run_tiger_phase(
-                    media_files, tiger_mode, tiger_save, mss_model, ss_model,
-                    device, num_phases, log_emit, prog_emit, _cancelled,
-                )
-
-            # Phase: Whisper 转录
-            w_phase = 1 + phase_offset
-            log_emit(f">>> Phase {w_phase}/{num_phases}: Whisper 转录")
-
-            def _w_factory():
-                return __import__("faster_whisper").WhisperModel(
-                    model_size, device=device, compute_type="int8",
-                )
-
-            wh = reg.acquire_model(f"whisper:{model_size}", device, _w_factory)
-            whisper_model = reg.get_model(wh)
-
-            for idx, media in enumerate(media_files, 1):
-                if _cancelled():
-                    break
-
-                def _w_p(pct, msg):
-                    prog_emit(
-                        (phase_offset * total + (idx - 1) + pct) / (total * num_phases),
-                        f"[Whisper {idx}/{total}] {msg}",
-                    )
-
-                subs, word_data = self._transcribe_single(
-                    media, tiger_results.get(media), lang, device,
-                    cond_prev, whisper_model, _w_p, _cancelled,
-                )
-                sub_results[media] = subs
-                word_results[media] = word_data
-
-                base = os.path.splitext(media)[0]
-                if retention.get("review") and wc_threshold > 0:
-                    srt_c, ass_c, low_c, tot_w = generate_review(subs, word_data, wc_threshold)
-                    if low_c > 0:
-                        write_review_files(base, srt_c, ass_c)
-                if retention.get("whisper"):
-                    write_srt(subs, base + ".srt")
-
-            reg.release_model(wh)
-
-            # Phase: 对齐
-            a_phase = 2 + phase_offset
-            aligned_results = {}
-            if sub_results and not _cancelled():
-                use_qwen3 = (align_model == "qwen3-fa-0.6b")
-                label = "Qwen3 对齐" if use_qwen3 else "MMS 对齐"
-                log_emit(f">>> Phase {a_phase}/{num_phases}: {label}")
-
-                if use_qwen3:
-                    from writansub.align.core import init_qwen3_model, run_qwen3_alignment
-                    mh = reg.acquire_model("qwen3_fa", device, lambda: init_qwen3_model(device))
-                    qwen3_model = reg.get_model(mh)
-                else:
-                    mh = reg.acquire_model("mms_fa", device, lambda: init_model(device))
-                    mms_bundle = reg.get_model(mh)
-
-                for idx, media in enumerate(media_files, 1):
-                    if _cancelled() or media not in sub_results:
-                        continue
-
-                    def _a_p(pct, msg):
-                        prog_emit(
-                            ((1 + phase_offset) * total + (idx - 1) + pct) / (total * num_phases),
-                            f"[对齐 {idx}/{total}] {msg}",
-                        )
-
-                    waveform = load_audio(media)
-
-                    if use_qwen3:
-                        aligned = run_qwen3_alignment(
-                            waveform, sub_results[media],
-                            device=device, progress_callback=_a_p,
-                            model=qwen3_model, lang=lang,
-                            log_callback=log_emit,
-                            cancelled=_cancelled,
-                        )
-                    else:
-                        populate_romaji(sub_results[media], lang)
-                        aligned = run_alignment(
-                            waveform, sub_results[media],
-                            device=device, progress_callback=_a_p, model_bundle=mms_bundle,
-                            log_callback=log_emit,
-                            cancelled=_cancelled,
-                        )
-
-                    final = post_process(aligned, **pp)
-                    aligned_results[media] = final
-
-                    base = os.path.splitext(media)[0]
-                    if retention.get("review") and ac_threshold > 0:
-                        low_a = {s.index for s in final if s.score < ac_threshold}
-                        if low_a:
-                            mark_low_align_in_review(base, low_a)
-                    if retention.get("force_align"):
-                        write_srt(final, base + "_aligned.srt")
-
-                reg.release_model(mh)
-
-            # Phase: AI 翻译
-            if translate_cfg and aligned_results and not _cancelled():
-                log_emit(f">>> Phase {num_phases}/{num_phases}: AI 翻译")
-                for idx, media in enumerate(media_files, 1):
-                    if _cancelled() or media not in aligned_results:
-                        continue
-
-                    def _t_p(pct, msg):
-                        prog_emit(
-                            ((num_phases - 1) * total + (idx - 1) + pct) / (total * num_phases),
-                            f"[翻译 {idx}/{total}] {msg}",
-                        )
-
-                    translate_subs(
-                        aligned_results[media], **translate_cfg,
-                        log_callback=log_emit, progress_callback=_t_p,
-                        cancelled=_cancelled,
-                    )
-                    write_srt(
-                        merge_bilingual(aligned_results[media]),
-                        os.path.splitext(media)[0] + ".srt",
-                    )
-            elif aligned_results and not _cancelled():
-                for media, subs in aligned_results.items():
-                    write_srt(subs, os.path.splitext(media)[0] + ".srt")
-
-            if not _cancelled():
-                prog_emit(1.0, "任务完成")
-                log_emit(f"全部完成! 已处理 {total} 个文件")
-
+            run_pipeline(cfg, log=log_emit, progress=prog_emit)
+        except CancelledError:
+            log_emit("任务已取消")
         except Exception as e:
             log_emit(f"发生错误: {e}")
         finally:
             self._signals.finished.emit()
-
-    def _run_tiger_phase(self, media_files, tiger_mode, tiger_save, mss_model,
-                         ss_model, device, num_phases, log_emit, prog_emit,
-                         cancelled) -> dict:
-        """执行 TIGER 增强阶段，返回 tiger_results"""
-        log_emit(f">>> Phase 1/{num_phases}: TIGER 增强")
-        from writansub.preprocess.core import run_dnr_batch, run_speech_batch
-
-        do_speech = (tiger_mode == "separate")
-        dnr_weight = 0.5 if do_speech else 1.0
-
-        def _dnr_p(pct, msg):
-            prog_emit(pct * dnr_weight / num_phases, f"[TIGER] {msg}")
-
-        tiger_results = run_dnr_batch(
-            media_files, device=device, save_intermediate=tiger_save,
-            mss_model=mss_model,
-            log_callback=log_emit, progress_callback=_dnr_p,
-        )
-
-        if do_speech and tiger_results and not cancelled():
-            def _spk_p(pct, msg):
-                prog_emit((0.5 + pct * 0.5) / num_phases, f"[TIGER] {msg}")
-
-            run_speech_batch(
-                tiger_results, device=device, save_intermediate=tiger_save,
-                ss_model=ss_model,
-                log_callback=log_emit, progress_callback=_spk_p,
-            )
-
-        return tiger_results
-
-    def _transcribe_single(self, media, tiger_data, lang, device,
-                           cond_prev, whisper_model, progress_callback, cancelled):
-        """对单个媒体文件执行 Whisper 转录，处理 TIGER 增强数据"""
-        whisper_input = media
-        tmp_dialog = None
-
-        if tiger_data and "dialog_wav" in tiger_data:
-            from writansub.preprocess.core import save_wav
-            import tempfile
-            tmp_dialog = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            tmp_dialog.close()
-            save_wav(tiger_data["dialog_wav"], tmp_dialog.name, tiger_data["dialog_sr"])
-            whisper_input = tmp_dialog.name
-
-        try:
-            overlap_r = tiger_data.get("overlap_regions") if tiger_data else None
-            separated = None
-            if tiger_data and "spk1_wav" in tiger_data:
-                separated = (tiger_data["spk1_wav"], tiger_data["spk2_wav"])
-
-            if overlap_r and separated:
-                return self._whisper_with_overlap(
-                    whisper_input, overlap_r, separated,
-                    tiger_data.get("spk_sr", 16000),
-                    lang, device, cond_prev, whisper_model, progress_callback,
-                    cancelled,
-                )
-
-            return transcribe(
-                whisper_input, lang=lang, device=device,
-                log_callback=self._signals.log_requested.emit,
-                progress_callback=progress_callback,
-                condition_on_previous_text=cond_prev, model=whisper_model,
-                cancelled=cancelled,
-            )
-        finally:
-            if tmp_dialog:
-                try:
-                    os.unlink(tmp_dialog.name)
-                except OSError:
-                    pass
-
-    def _whisper_with_overlap(self, media, overlap_regions, separated_tracks,
-                              spk_sr, lang, device, cond_prev, whisper_model,
-                              progress_callback, cancelled):
-        """重叠区域分轨转录并合并结果"""
-        import tempfile
-        from writansub.preprocess.core import save_wav
-
-        full_subs, full_word_data = transcribe(
-            media, lang=lang, device=device,
-            log_callback=self._signals.log_requested.emit,
-            progress_callback=progress_callback,
-            condition_on_previous_text=cond_prev, model=whisper_model,
-            cancelled=cancelled,
-        )
-        if not overlap_regions:
-            return full_subs, full_word_data
-
-        overlap_subs = []
-        spk1_wav, spk2_wav = separated_tracks
-
-        for region in overlap_regions:
-            if cancelled():
-                break
-            start = int(region.start * spk_sr)
-            end = int(region.end * spk_sr)
-
-            for spk_wav in [spk1_wav, spk2_wav]:
-                chunk = spk_wav[:, start:end]
-                if chunk.shape[1] < 1600:
-                    continue
-
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    tmp_path = f.name
-                try:
-                    save_wav(chunk, tmp_path, spk_sr)
-                    local_subs, _ = transcribe(
-                        tmp_path, lang=lang, device=device,
-                        condition_on_previous_text=False, model=whisper_model,
-                    )
-                    for s in local_subs:
-                        s.start += region.start
-                        s.end += region.start
-                    overlap_subs.extend(local_subs)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-
-        # 过滤掉落在重叠区域内的原始字幕
-        commented = set()
-        for i, sub in enumerate(full_subs):
-            mid = (sub.start + sub.end) / 2
-            if any(r.start <= mid <= r.end for r in overlap_regions):
-                commented.add(i)
-
-        active = [s for i, s in enumerate(full_subs) if i not in commented] + overlap_subs
-        active.sort(key=lambda s: s.start)
-        for i, s in enumerate(active, 1):
-            s.index = i
-
-        return active, [[] for _ in active]
