@@ -1,7 +1,3 @@
-"""[废案模块] 语音合成：多模型分派（MMS_FA 对齐 / Style-Bert-VITS2 TTS）
-未接入主程序，配套 GUI (tts.py) 同为废案。
-"""
-
 import json
 import os
 from typing import Any, Callable
@@ -11,17 +7,8 @@ import numpy as np
 from writansub.types import Sub
 
 
-# ── 模型元信息（不加载权重）──────────────────────────────
-
 
 def load_model_meta(model_name: str, model_dir: str = "") -> dict[str, Any]:
-    """读取模型元信息，供 GUI 填充下拉框。
-
-    Returns:
-        dict with keys depending on model:
-        - mms_fa: {}  (无额外元信息)
-        - sbv2-jp-extra: {speakers: list[str], styles: list[str], sample_rate: int}
-    """
     if model_name == "mms_fa":
         return {}
 
@@ -38,11 +25,8 @@ def load_model_meta(model_name: str, model_dir: str = "") -> dict[str, Any]:
     raise ValueError(f"未知模型: {model_name}")
 
 
-# ── 模型加载 ──────────────────────────────────────────
-
 
 def init_model(model_name: str, device: str, model_dir: str = "") -> Any:
-    """加载模型，返回模型对象。"""
     if model_name == "mms_fa":
         from writansub.align.core import init_model as _init_mms
         return _init_mms(device)
@@ -54,7 +38,6 @@ def init_model(model_name: str, device: str, model_dir: str = "") -> Any:
 
 
 def _init_sbv2(model_dir: str, device: str):
-    """加载 Style-Bert-VITS2 JP-Extra 模型。"""
     from style_bert_vits2.nlp import bert_models
     from style_bert_vits2.constants import Languages
     from style_bert_vits2.tts_model import TTSModel
@@ -81,8 +64,6 @@ def _init_sbv2(model_dir: str, device: str):
     return model
 
 
-# ── MMS_FA 对齐 ──────────────────────────────────────
-
 
 def run_mms_fa(
     audio_path: str,
@@ -94,7 +75,6 @@ def run_mms_fa(
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> list[Sub]:
-    """MMS_FA 路径：音频 + SRT → 对齐后的 list[Sub]。"""
     from writansub.align.core import load_audio, run_alignment, post_process
 
     _log = log_callback or (lambda msg: None)
@@ -121,8 +101,6 @@ def run_mms_fa(
     return final
 
 
-# ── SBV2 合成 ──────────────────────────────────────
-
 
 def run_sbv2(
     subs: list[Sub],
@@ -134,11 +112,7 @@ def run_sbv2(
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[np.ndarray, int]:
-    """SBV2 路径：SRT → 时间对齐的 WAV 数组。
-
-    Returns:
-        (audio_int16, sample_rate)
-    """
+    """返回 (audio_int16, sample_rate)。"""
     from style_bert_vits2.constants import Languages
 
     _log = log_callback or (lambda msg: None)

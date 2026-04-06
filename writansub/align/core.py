@@ -1,5 +1,3 @@
-"""强制对齐：罗马音转换、音频加载、MMS_FA / Qwen3 对齐、后处理"""
-
 import re
 from dataclasses import replace
 from typing import Any, Callable
@@ -31,7 +29,6 @@ def _get_katsu() -> Any:
 
 
 def japanese_to_romaji(text: str) -> str:
-    """日语文本 → 小写罗马音，只保留 a-z。"""
     cleaned = _PUNCT_CJK_RE.sub('', text)
     if not cleaned:
         return ""
@@ -40,7 +37,6 @@ def japanese_to_romaji(text: str) -> str:
 
 
 def text_to_romaji(text: str, lang: str) -> str:
-    """多语言文本 → 小写罗马音 (a-z)，按语言分派转换方法。"""
     if lang == "ja":
         return japanese_to_romaji(text)
 
@@ -73,7 +69,6 @@ def text_to_romaji(text: str, lang: str) -> str:
 
 
 def load_audio(path: str):
-    """加载任意媒体文件，解码为 MMS_FA 所需的 16kHz 单声道 [1, T] Tensor。"""
     from torchaudio.pipelines import MMS_FA as bundle
     from writansub.bridge import ResourceRegistry
     waveform, _ = ResourceRegistry.instance().decode_audio(path, sample_rate=bundle.sample_rate)
@@ -81,7 +76,6 @@ def load_audio(path: str):
 
 
 def init_model(device: str) -> tuple:
-    """初始化 MMS_FA 模型、tokenizer、aligner。"""
     from torchaudio.pipelines import MMS_FA as bundle
     model = bundle.get_model().to(device)
     tokenizer = bundle.get_tokenizer()
@@ -97,10 +91,7 @@ def align_segment(
     aligner,
     device: str,
 ) -> tuple[float, float, float] | None:
-    """
-    对单个音频片段做 forced alignment。
-    返回: (start_sec, end_sec, avg_score) 相对于 chunk 起点，或 None。
-    """
+    """返回 (start_sec, end_sec, avg_score) 或 None。"""
     import torch
     from torchaudio.pipelines import MMS_FA as bundle
 
@@ -128,8 +119,6 @@ def align_segment(
     return (start_sec, end_sec, avg_score)
 
 
-# ── Qwen3-ForcedAligner ──────────────────────────────────────────
-
 LANG_MAP: dict[str, str] = {
     "ja": "Japanese",
     "zh": "Chinese",
@@ -144,7 +133,6 @@ LANG_MAP: dict[str, str] = {
 
 
 def init_qwen3_model(device: str) -> Any:
-    """加载 Qwen3-ForcedAligner-0.6B 模型。"""
     import os
     import torch
     from qwen_asr import Qwen3ForcedAligner
@@ -161,11 +149,8 @@ def init_qwen3_model(device: str) -> Any:
     return model
 
 
-# ── 统一对齐入口 ──────────────────────────────────────────
-
 
 def _align_one_mms(chunk, sub, model_bundle, device, sr):
-    """MMS_FA 单段对齐，返回 (start, end, score) 或 None。"""
     if not sub.romaji:
         return None
     model, tokenizer, aligner = model_bundle
@@ -173,7 +158,6 @@ def _align_one_mms(chunk, sub, model_bundle, device, sr):
 
 
 def _align_one_qwen3(chunk, sub, qwen3_model, sr, qwen_lang):
-    """Qwen3 单段对齐，返回 (start, end, score) 或 None。"""
     import numpy as np
 
     text = sub.text.strip()
@@ -211,13 +195,7 @@ def run_alignment(
     qwen3_model: Any | None = None,
     lang: str = "ja",
 ) -> list[Sub]:
-    """
-    对所有字幕段执行 forced alignment（MMS_FA 或 Qwen3）。
-
-    - 传入 model_bundle → 使用 MMS_FA
-    - 传入 qwen3_model → 使用 Qwen3-ForcedAligner
-    - 都不传 → 默认创建 MMS_FA
-    """
+    """传 model_bundle → MMS_FA，传 qwen3_model → Qwen3，都不传 → 默认 MMS_FA。"""
     use_qwen3 = qwen3_model is not None
 
     if use_qwen3:
@@ -293,7 +271,7 @@ def run_qwen3_alignment(
     log_callback: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> list[Sub]:
-    """run_alignment 的 Qwen3 便捷入口（保持向后兼容）。"""
+    """run_alignment 的 Qwen3 便捷入口。"""
     if model is None:
         model = init_qwen3_model(device)
     return run_alignment(

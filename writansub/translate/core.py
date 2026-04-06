@@ -1,5 +1,3 @@
-"""AI 翻译：调用 OpenAI 兼容 API 翻译字幕"""
-
 import re
 from typing import Callable
 
@@ -17,25 +15,7 @@ def translate_subs(
     progress_callback: Callable[[float, str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
 ) -> list[Sub]:
-    """
-    使用 OpenAI 兼容 API 翻译字幕列表（内存操作）。
-
-    翻译结果写入每条 Sub 的 translated 字段。
-
-    Args:
-        subs: 输入字幕列表
-        target_lang: 目标语言 (如 "简体中文", "English")
-        api_base: API 地址
-        api_key: API Key
-        model: 模型名
-        batch_size: 每批翻译条数
-        log_callback: 日志回调
-        progress_callback: 进度回调
-        cancelled: 取消检查回调
-
-    Returns:
-        同一 subs 列表（translated 字段已填充）
-    """
+    """翻译结果写入每条 Sub 的 translated 字段，原地修改。"""
     from openai import OpenAI
     from writansub.bridge import ResourceRegistry
 

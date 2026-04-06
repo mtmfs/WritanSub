@@ -1,5 +1,3 @@
-"""路径管理：集中定义所有运行时路径"""
-
 import os
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

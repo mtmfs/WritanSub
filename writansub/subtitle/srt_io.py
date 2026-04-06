@@ -1,12 +1,9 @@
-"""SRT 读写：parse_srt、write_srt、populate_romaji、merge_bilingual"""
-
 import dataclasses
 
 from writansub.types import Sub, fmt_srt_time
 
 
 def parse_srt(path: str, lang: str = "ja") -> list[Sub]:
-    """解析 SRT 文件"""
     import pysrt
     from writansub.align.core import text_to_romaji
 
@@ -25,7 +22,6 @@ def parse_srt(path: str, lang: str = "ja") -> list[Sub]:
 
 
 def write_srt(subs: list[Sub], path: str) -> None:
-    """写入 SRT 文件"""
     with open(path, 'w', encoding='utf-8') as f:
         for sub in subs:
             f.write(f"{sub.index}\n")
@@ -34,7 +30,6 @@ def write_srt(subs: list[Sub], path: str) -> None:
 
 
 def populate_romaji(subs: list[Sub], lang: str) -> None:
-    """为 Sub 列表填充 romaji 字段（原地修改）。"""
     from writansub.align.core import text_to_romaji
 
     for sub in subs:
@@ -43,10 +38,7 @@ def populate_romaji(subs: list[Sub], lang: str) -> None:
 
 
 def merge_bilingual(subs: list[Sub]) -> list[Sub]:
-    """合并 text + translated 为双语字幕，返回新 Sub 列表。
-
-    每条字幕的 text 变为 "原文\\n译文" 格式。
-    """
+    """text + translated → "原文\\n译文"，返回新列表。"""
     result = []
     for sub in subs:
         merged_text = f"{sub.text}\n{sub.translated}" if sub.translated else sub.text

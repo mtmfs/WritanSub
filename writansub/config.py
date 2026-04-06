@@ -1,12 +1,8 @@
-"""配置中心：读写 PP 和翻译两套 JSON 配置文件"""
-
 import json
 import os
 from typing import Any
 
 from writansub.paths import PP_CONFIG_PATH, TRANSLATE_CONFIG_PATH, GUI_STATE_PATH
-
-# ── 后处理参数 ──────────────────────────────────────────
 
 PP_DEFAULTS: dict[str, float] = {
     "extend_end": 0.30,
@@ -57,7 +53,6 @@ PARAM_DEFS: dict[str, dict[str, Any]] = {
 
 
 def _load_json(path: str) -> dict[str, Any]:
-    """读取 JSON 文件，失败时返回空字典"""
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -66,7 +61,6 @@ def _load_json(path: str) -> dict[str, Any]:
 
 
 def _save_json(path: str, data: dict[str, Any]) -> None:
-    """将数据写入 JSON 文件，写入失败时静默忽略"""
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
@@ -75,7 +69,6 @@ def _save_json(path: str, data: dict[str, Any]) -> None:
 
 
 def load_pp_config() -> dict[str, float]:
-    """从配置文件加载后处理参数，文件不存在则返回默认值"""
     raw = _load_json(PP_CONFIG_PATH)
     try:
         return {k: float(raw.get(k, v)) for k, v in PP_DEFAULTS.items()}
@@ -84,11 +77,8 @@ def load_pp_config() -> dict[str, float]:
 
 
 def save_pp_config(values: dict[str, float]) -> None:
-    """保存后处理参数到配置文件"""
     _save_json(PP_CONFIG_PATH, values)
 
-
-# ── 翻译参数 ──────────────────────────────────────────
 
 TRANSLATE_DEFAULTS: dict[str, Any] = {
     "api_base": "https://api.deepseek.com/v1",
@@ -100,23 +90,17 @@ TRANSLATE_DEFAULTS: dict[str, Any] = {
 
 
 def load_translate_config() -> dict[str, Any]:
-    """加载翻译配置"""
     raw = _load_json(TRANSLATE_CONFIG_PATH)
     return TRANSLATE_DEFAULTS | {k: raw[k] for k in TRANSLATE_DEFAULTS if k in raw}
 
 
 def save_translate_config(values: dict[str, Any]) -> None:
-    """保存翻译配置"""
     _save_json(TRANSLATE_CONFIG_PATH, values)
 
 
-# ── GUI 状态持久化 ──────────────────────────────────────
-
 def load_gui_state() -> dict[str, Any]:
-    """加载 GUI 状态，文件不存在返回空字典"""
     return _load_json(GUI_STATE_PATH)
 
 
 def save_gui_state(state: dict[str, Any]) -> None:
-    """保存 GUI 状态到 gui_state.json"""
     _save_json(GUI_STATE_PATH, state)

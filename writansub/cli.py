@@ -1,13 +1,3 @@
-"""WritanSub CLI — 命令行字幕处理工具
-
-用法:
-    writansub-cli pipeline video.mp4 [options]
-    writansub-cli preprocess video.mp4 --denoise [options]
-    writansub-cli transcribe video.mp4 -o output.srt [options]
-    writansub-cli align --audio video.wav --srt raw.srt [options]
-    writansub-cli translate input.srt -o translated.srt [options]
-"""
-
 import argparse
 import json
 import os
@@ -20,18 +10,14 @@ from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
 
 
 def _ensure_utf8() -> None:
-    """Windows 终端默认 GBK，强制切 UTF-8 避免乱码"""
     if sys.platform == "win32":
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(encoding="utf-8")
 
 
-# ── 终端进度条 ───────────────────────────────────────────
-
 
 def _progress_bar(pct: float, msg: str) -> None:
-    """覆写当前行的进度条"""
     width = 30
     filled = int(width * min(pct, 1.0))
     bar = "#" * filled + "-" * (width - filled)
@@ -43,14 +29,12 @@ def _progress_bar(pct: float, msg: str) -> None:
 
 
 def _log(msg: str) -> None:
-    """日志输出到 stderr"""
     sys.stderr.write(f"\r{'':<80}\r")  # 清掉进度条残留
     sys.stderr.write(f"  {msg}\n")
     sys.stderr.flush()
 
 
 def _setup_cancel_handler() -> None:
-    """Ctrl+C → 设置 cancelled 标志而非直接退出"""
     from writansub.bridge import ResourceRegistry
 
     def _handler(sig, frame):
@@ -65,8 +49,6 @@ def _setup_cancel_handler() -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
-# ── 公共参数组 ───────────────────────────────────────────
-
 
 def _add_device_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
@@ -79,7 +61,6 @@ def _add_lang_arg(p: argparse.ArgumentParser) -> None:
 
 
 def _add_pp_args(p: argparse.ArgumentParser) -> None:
-    """后处理参数组"""
     g = p.add_argument_group("后处理参数")
     g.add_argument("--extend-end", type=float, default=None,
                    help=f"向后延伸秒数 (默认: {PP_DEFAULTS['extend_end']})")
@@ -100,7 +81,6 @@ def _add_pp_args(p: argparse.ArgumentParser) -> None:
 
 
 def _add_translate_args(p: argparse.ArgumentParser) -> None:
-    """翻译参数组"""
     g = p.add_argument_group("翻译参数")
     g.add_argument("--api-base", default=None,
                    help=f"API 地址 (默认: {TRANSLATE_DEFAULTS['api_base']})")
@@ -115,7 +95,6 @@ def _add_translate_args(p: argparse.ArgumentParser) -> None:
 
 
 def _load_config_file(path: str | None) -> dict:
-    """从 JSON 加载配置覆盖，不存在则返回空字典"""
     if not path:
         return {}
     with open(path, "r", encoding="utf-8") as f:
@@ -123,7 +102,6 @@ def _load_config_file(path: str | None) -> dict:
 
 
 def _resolve_pp(args: argparse.Namespace, file_cfg: dict) -> dict[str, float]:
-    """解析后处理参数：CLI > config file > PP_DEFAULTS"""
     result = {}
     for key, default in PP_DEFAULTS.items():
         cli_key = key.replace("_", "-")
@@ -139,7 +117,6 @@ def _resolve_pp(args: argparse.Namespace, file_cfg: dict) -> dict[str, float]:
 
 
 def _resolve_translate(args: argparse.Namespace, file_cfg: dict) -> dict:
-    """解析翻译参数：CLI > config file > TRANSLATE_DEFAULTS"""
     mapping = {
         "api_base": "api_base",
         "api_key": "api_key",
@@ -161,11 +138,8 @@ def _resolve_translate(args: argparse.Namespace, file_cfg: dict) -> dict:
     return result
 
 
-# ── 子命令实现 ───────────────────────────────────────────
-
 
 def cmd_pipeline(args: argparse.Namespace) -> None:
-    """pipeline 子命令"""
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.pipeline.runner import PipelineConfig, run_pipeline
 
@@ -214,7 +188,6 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
 
 
 def cmd_preprocess(args: argparse.Namespace) -> None:
-    """preprocess 子命令"""
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.preprocess.core import run_dnr_batch, run_speech_batch
 
@@ -265,7 +238,6 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
 
 
 def cmd_transcribe(args: argparse.Namespace) -> None:
-    """transcribe 子命令"""
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.transcribe.core import transcribe as do_transcribe
     from writansub.subtitle.srt_io import write_srt
@@ -303,7 +275,6 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
 
 def cmd_align(args: argparse.Namespace) -> None:
-    """align 子命令"""
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.subtitle.srt_io import parse_srt, write_srt
     from writansub.align.core import (
@@ -378,7 +349,6 @@ def cmd_align(args: argparse.Namespace) -> None:
 
 
 def cmd_translate(args: argparse.Namespace) -> None:
-    """translate 子命令"""
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.subtitle.srt_io import parse_srt, write_srt, merge_bilingual
     from writansub.translate.core import translate_subs
@@ -416,8 +386,6 @@ def cmd_translate(args: argparse.Namespace) -> None:
         _log("翻译已取消")
         sys.exit(1)
 
-
-# ── argparse 构建 ────────────────────────────────────────
 
 
 def build_parser() -> argparse.ArgumentParser:

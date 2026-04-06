@@ -1,5 +1,3 @@
-"""TIGER 语音分离逻辑 (DnR) + 说话人分离 (Speech) + VAD 重叠检测"""
-
 import os
 import wave
 from dataclasses import dataclass
@@ -14,13 +12,11 @@ from writansub.bridge import ResourceRegistry
 
 @dataclass
 class TimeSpan:
-    """时间段定义"""
     start: float
     end: float
 
 
 def save_wav(waveform: torch.Tensor, path: str, sr: int) -> None:
-    """保存 waveform [C, T] 为 16-bit WAV"""
     if waveform.dim() == 1:
         waveform = waveform.unsqueeze(0)
     waveform = waveform.clamp(-1.0, 1.0).cpu()
@@ -57,7 +53,6 @@ def separate_dnr_demucs(
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Demucs 音源分离：vocals / drums+bass+other"""
     _log = log_callback or (lambda msg: None)
     _progress = progress_callback or (lambda pct, msg: None)
 
@@ -113,7 +108,6 @@ def separate_dnr(
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """DnR 语音增强分离"""
     _log = log_callback or (lambda msg: None)
     _progress = progress_callback or (lambda pct, msg: None)
 
@@ -161,7 +155,6 @@ def _chunk_inference(
     chunk_length: float = 12.0,
     hop_length: float = 4.0,
 ) -> torch.Tensor:
-    """分块推理，防止长音频导致的显存溢出 (OOM)"""
     device = mixture.device
     batch_length = mixture.shape[-1]
 
@@ -215,7 +208,6 @@ def separate_speakers(
     cache_dir: str = "",
     log_callback: Callable[[str], None] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """说话人分离"""
     _log = log_callback or (lambda msg: None)
 
     reg = ResourceRegistry.instance()
@@ -253,10 +245,6 @@ def separate_speakers_tfgridnet(
     device: str = "cpu",
     log_callback: Callable[[str], None] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """使用 TF-GridNet (ESPnet) 进行说话人分离。
-
-    输出重采样到 16kHz 以保持与 TIGER-Speech 兼容。
-    """
     _log = log_callback or (lambda msg: None)
 
     model_sr = 8000
@@ -336,7 +324,6 @@ _silero_cache: tuple[Any, Any] | None = None
 
 
 def _get_silero_vad() -> tuple[Any, Any]:
-    """获取 Silero VAD 模型和工具函数，全局缓存只加载一次。"""
     global _silero_cache
     if _silero_cache is None:
         model, utils = torch.hub.load(
@@ -381,7 +368,6 @@ def detect_overlaps(
     vad_threshold: float = 0.5,
     log_callback: Callable[[str], None] | None = None,
 ) -> tuple[list[TimeSpan], float]:
-    """重叠区域检测"""
     _log = log_callback or (lambda msg: None)
 
     _log("正在对说话人 1 进行 VAD 检测...")
@@ -400,7 +386,6 @@ def detect_overlaps(
 
 
 def _make_file_progress(idx: int, total: int, cb: Callable[[float, str], None] | None):
-    """将局部进度 [0,1] 映射到全局 [idx/total, (idx+1)/total]"""
     if not cb:
         return lambda pct, msg: None
     base, scale = idx / total, 1.0 / total

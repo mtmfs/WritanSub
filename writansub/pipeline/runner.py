@@ -1,8 +1,3 @@
-"""流水线编排：无 GUI 依赖的完整处理流程
-
-从 PipelineTab._run_pipeline 提取，供 CLI 和 GUI 共用。
-"""
-
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -19,7 +14,6 @@ from writansub.align.core import load_audio, run_alignment, post_process, init_m
 
 @dataclass
 class PipelineConfig:
-    """流水线全部参数（CLI / GUI 共用）"""
     media_files: list[str] = field(default_factory=list)
     lang: str = "ja"
     device: str = "cuda"
@@ -59,11 +53,7 @@ def run_pipeline(
     log: Callable[[str], None],
     progress: Callable[[float, str], None],
 ) -> None:
-    """执行完整流水线（TIGER → Whisper → 对齐 → 翻译）。
-
-    Raises:
-        CancelledError: 用户取消时抛出。
-    """
+    """TIGER → Whisper → 对齐 → 翻译。"""
     import torch
 
     reg = ResourceRegistry.instance()
@@ -231,8 +221,6 @@ def run_pipeline(
         log(f"全部完成! 已处理 {total} 个文件")
 
 
-# ── 内部辅助函数 ─────────────────────────────────────────
-
 
 def _run_tiger_phase(
     cfg: PipelineConfig,
@@ -241,7 +229,6 @@ def _run_tiger_phase(
     progress: Callable[[float, str], None],
     cancelled: Callable[[], bool],
 ) -> dict:
-    """执行 TIGER 增强阶段"""
     log(f">>> Phase 1/{num_phases}: TIGER 增强")
     from writansub.preprocess.core import run_dnr_batch, run_speech_batch
 
@@ -278,7 +265,6 @@ def _transcribe_single(
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
 ) -> tuple[list, list]:
-    """对单个媒体文件执行 Whisper 转录"""
     from writansub.preprocess.core import save_wav
 
     whisper_input = media
@@ -330,7 +316,6 @@ def _whisper_with_overlap(
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
 ) -> tuple[list, list]:
-    """重叠区域分轨转录并合并结果"""
     from writansub.preprocess.core import save_wav
 
     reg = ResourceRegistry.instance()

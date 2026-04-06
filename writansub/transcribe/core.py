@@ -1,5 +1,3 @@
-"""语音识别：调用 faster-whisper 将媒体转录为 list[Sub]"""
-
 from typing import Any, Callable
 
 from writansub.types import Sub, WordInfo
@@ -17,27 +15,7 @@ def transcribe(
     cancelled: Callable[[], bool] | None = None,
     vad_filter: bool = False,
 ) -> tuple[list[Sub], list[list[WordInfo]]]:
-    """
-    使用 faster_whisper 将媒体文件转录为字幕列表。
-
-    纯内存操作，不写任何文件。Review 逻辑由独立模块处理。
-
-    Args:
-        file_path: 媒体文件路径
-        lang: 语言代码
-        device: "cuda" 或 "cpu"
-        log_callback: 日志回调 (msg: str) -> None
-        progress_callback: 进度回调 (pct, msg) -> None
-        condition_on_previous_text: 是否用前一句结果作为下一句上下文
-        model: 预加载的 WhisperModel，为 None 时内部创建
-        cancelled: 取消检查回调，返回 True 时中断识别
-        vad_filter: 启用 Silero VAD 跳过静音段，加速识别
-
-    Returns:
-        (subs, word_data):
-            subs — list[Sub] 字幕列表
-            word_data — list[list[WordInfo]] 每句的词级数据
-    """
+    """返回 (subs, word_data)。model 为 None 时内部创建。"""
     from writansub.bridge import ResourceRegistry, CancelledError
 
     _log = log_callback or (lambda msg: None)

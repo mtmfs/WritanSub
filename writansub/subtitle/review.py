@@ -1,5 +1,3 @@
-"""Review 模块：从转录/对齐数据生成 review 标记文件"""
-
 import os
 import re
 
@@ -26,16 +24,7 @@ def generate_review(
     word_data: list[list[WordInfo]],
     threshold: float,
 ) -> tuple[str, str, int, int]:
-    """生成 review SRT + ASS 内容字符串。
-
-    Args:
-        subs: 字幕列表
-        word_data: 每句的词列表（与 subs 一一对应）
-        threshold: 词级置信阈值
-
-    Returns:
-        (srt_content, ass_content, low_count, total_words)
-    """
+    """返回 (srt_content, ass_content, low_count, total_words)。"""
     srt_lines = []
     ass_lines = [_ASS_REVIEW_HEADER]
     low_count = 0
@@ -75,13 +64,6 @@ def generate_review(
 
 
 def write_review_files(base_path: str, srt_content: str, ass_content: str) -> None:
-    """将 review 内容写到磁盘。
-
-    Args:
-        base_path: 不含扩展名的基础路径
-        srt_content: review SRT 文本
-        ass_content: review ASS 文本
-    """
     with open(f"{base_path}_review.srt", "w", encoding="utf-8") as f:
         f.write(srt_content)
     with open(f"{base_path}_review.ass", "w", encoding="utf-8-sig") as f:
@@ -89,7 +71,6 @@ def write_review_files(base_path: str, srt_content: str, ass_content: str) -> No
 
 
 def mark_low_align_in_review(base: str, low_indices: set[int]) -> None:
-    """在已有的 _review.srt / _review.ass 中给低分句子加【】标记。"""
     review_srt = f"{base}_review.srt"
     review_ass = f"{base}_review.ass"
 
