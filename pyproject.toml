@@ -1,10 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "writansub"
 version = "0.1.6.3"
 requires-python = ">=3.12"
 dependencies = [
-    "torch",
-    "torchaudio",
+    "torch==2.10.0",
+    "torchaudio==2.10.0",
     "faster-whisper",
     "numpy",
     "pysrt",
@@ -20,9 +24,11 @@ dependencies = [
     "demucs",
     "espnet",
     "espnet-model-zoo",
-    "maturin>=1.4.0",
     "writansub_native",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["writansub"]
 
 [project.scripts]
 writansub = "writansub.gui.app:main"
