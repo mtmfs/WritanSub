@@ -77,6 +77,9 @@ def _enable_windows_dpi_awareness() -> None:
 def main() -> None:
     _enable_windows_dpi_awareness()
 
+    from writansub.gui.driver_check import check_driver
+    check_driver()
+
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
