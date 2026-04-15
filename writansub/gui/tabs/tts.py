@@ -30,7 +30,6 @@ class _TTSSignals(QObject):
 
 
 class TTSTab(StateMixin, QWidget):
-    """Tab: 语音合成（多模型）"""
 
     _PP_KEYS = [
         "extend_end", "extend_start", "gap_threshold",
@@ -66,7 +65,6 @@ class TTSTab(StateMixin, QWidget):
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(12, 12, 12, 12)
 
-        # 模型选择
         card_model = QGroupBox("模型")
         settings_layout.addWidget(card_model)
         model_layout = QHBoxLayout(card_model)
@@ -84,7 +82,6 @@ class TTSTab(StateMixin, QWidget):
         model_layout.addWidget(self._device_combo)
         model_layout.addStretch()
 
-        # 共用：SRT 输入
         card_file = QGroupBox("文件")
         settings_layout.addWidget(card_file)
         file_layout = QGridLayout(card_file)
@@ -97,7 +94,6 @@ class TTSTab(StateMixin, QWidget):
         btn_srt.clicked.connect(self._browse_srt)
         file_layout.addWidget(btn_srt, 0, 2)
 
-        # MMS_FA 专属：音频输入 + 输出 SRT
         self._lbl_audio = QLabel("音频文件")
         file_layout.addWidget(self._lbl_audio, 1, 0)
         self._audio_edit = QLineEdit()
@@ -114,7 +110,6 @@ class TTSTab(StateMixin, QWidget):
         self._btn_out_srt.clicked.connect(self._browse_out_srt)
         file_layout.addWidget(self._btn_out_srt, 2, 2)
 
-        # SBV2 专属：输出 WAV
         self._lbl_out_wav = QLabel("输出 WAV")
         file_layout.addWidget(self._lbl_out_wav, 3, 0)
         self._out_wav_edit = QLineEdit()
@@ -148,7 +143,6 @@ class TTSTab(StateMixin, QWidget):
         settings_layout.addWidget(self._sbv2_panel)
         sbv2_layout = QVBoxLayout(self._sbv2_panel)
 
-        # 模型目录
         dir_row = QHBoxLayout()
         sbv2_layout.addLayout(dir_row)
         dir_row.addWidget(QLabel("模型目录"))
@@ -221,18 +215,15 @@ class TTSTab(StateMixin, QWidget):
         is_mms = (model == "mms_fa")
         is_sbv2 = (model == "sbv2-jp-extra")
 
-        # MMS_FA 专属
         for w in (self._lbl_audio, self._audio_edit, self._btn_audio,
                   self._lbl_out_srt, self._out_srt_edit, self._btn_out_srt):
             w.setVisible(is_mms)
         self._mms_panel.setVisible(is_mms)
 
-        # SBV2 专属
         for w in (self._lbl_out_wav, self._out_wav_edit, self._btn_out_wav):
             w.setVisible(is_sbv2)
         self._sbv2_panel.setVisible(is_sbv2)
 
-        # 按钮文字
         self._start_btn.setText("开始对齐" if is_mms else "开始合成")
 
     # ── 状态持久化 ─────────────────────────────────────

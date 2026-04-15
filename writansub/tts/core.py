@@ -46,7 +46,6 @@ def _init_sbv2(model_dir: str, device: str):
     bert_models.load_model(Languages.JP, "ku-nlp/deberta-v2-large-japanese-char-wwm")
     bert_models.load_tokenizer(Languages.JP, "ku-nlp/deberta-v2-large-japanese-char-wwm")
 
-    # 查找 safetensors 文件
     safetensors = None
     for name in os.listdir(model_dir):
         if name.endswith(".safetensors"):
@@ -117,7 +116,6 @@ def run_sbv2(
 
     _log = log_callback or (lambda msg: None)
 
-    # 获取 sample_rate 和 speaker_id
     sr = model.hyper_parameters.data.sampling_rate
     spk2id = model.hyper_parameters.data.spk2id if hasattr(model.hyper_parameters.data, "spk2id") else {}
     speaker_id = spk2id.get(speaker, 0) if speaker else 0

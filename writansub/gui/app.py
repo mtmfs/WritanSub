@@ -53,7 +53,6 @@ class MainWindow(QMainWindow):
             state.update(tab.save_state())
         save_gui_state(state)
 
-        # 收集所有 ParamSpinBox 当前值，保存 PP 配置
         from writansub.gui.widgets import ParamSpinBox
         pp = {}
         for spin in self.findChildren(ParamSpinBox):

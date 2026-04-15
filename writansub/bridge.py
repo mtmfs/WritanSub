@@ -1,6 +1,7 @@
 import functools
 import gc
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -25,6 +26,18 @@ def _get_ffmpeg() -> str:
     from imageio_ffmpeg import get_ffmpeg_exe
     return get_ffmpeg_exe()
 
+
+@functools.lru_cache(maxsize=1)
+def _get_ffprobe() -> str:
+    """查找 ffprobe 可执行路径（系统优先，否则从 ffmpeg 同目录推导），结果缓存。"""
+    path = shutil.which("ffprobe")
+    if path:
+        return path
+    ffmpeg = _get_ffmpeg()
+    dirpath = os.path.dirname(ffmpeg)
+    probe_name = os.path.basename(ffmpeg).replace("ffmpeg", "ffprobe")
+    return os.path.join(dirpath, probe_name) if dirpath else probe_name
+
 class ResourceRegistry:
     _instance: "ResourceRegistry | None" = None
 
@@ -40,7 +53,7 @@ class ResourceRegistry:
         self._model_handles: dict[tuple[str, str], int] = {}
         self.cancelled = False
         self._pause_event = threading.Event()
-        self._pause_event.set()  # 初始为非暂停状态
+        self._pause_event.set()
 
     def pause(self) -> None:
         self._pause_event.clear()
@@ -144,5 +157,5 @@ class ResourceRegistry:
     def shutdown(self) -> None:
         log.info("Native Shutdown Initiated...")
         self.cancelled = True
-        self._pause_event.set()  # 解除暂停，让线程能退出
+        self._pause_event.set()
         self._native.shutdown()

@@ -3,7 +3,7 @@ import io
 from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
     QHBoxLayout, QDoubleSpinBox, QGridLayout, QFrame,
-    QScrollArea, QComboBox, QStyledItemDelegate,
+    QScrollArea, QComboBox, QStyledItemDelegate, QStyleOptionViewItem,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QPalette
@@ -143,23 +143,58 @@ class NoScrollComboBox(_NoScrollMixin, QComboBox):
 
 class _InfoDelegate(QStyledItemDelegate):
 
+    _INFO_GAP = 16
+    _RIGHT_PAD = 8
+    _NAME_MAX_PX = 240
+
     def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-        info = index.data(Qt.UserRole + 1)
-        if not info:
-            return
-        painter.save()
-        rect = option.rect.adjusted(0, 0, -8, 0)
-        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
-        painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, info)
-        painter.restore()
+        info = index.data(Qt.UserRole + 1) or ""
+        info_width = option.fontMetrics.horizontalAdvance(info) if info else 0
+        reserved = info_width + self._INFO_GAP + self._RIGHT_PAD if info else 0
+
+        # 给基类绘制名字的区域：原 rect 右边扣掉 info 占位
+        opt = QStyleOptionViewItem(option)
+        opt.rect = option.rect.adjusted(0, 0, -reserved, 0)
+        name = index.data(Qt.DisplayRole) or ""
+        max_name_width = min(opt.rect.width(), self._NAME_MAX_PX)
+        elided = option.fontMetrics.elidedText(name, Qt.ElideMiddle, max_name_width)
+        if elided != name:
+            opt.text = elided
+            # 用 model index 的 displayText override 不方便，直接靠 super().paint 用 opt.text
+        super().paint(painter, opt, index)
+
+        if info:
+            painter.save()
+            painter.setPen(option.palette.color(QPalette.ColorRole.Text))
+            painter.drawText(
+                option.rect.adjusted(0, 0, -self._RIGHT_PAD, 0),
+                Qt.AlignRight | Qt.AlignVCenter,
+                info,
+            )
+            painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        name = index.data(Qt.DisplayRole) or ""
+        info = index.data(Qt.UserRole + 1) or ""
+        name_w = min(option.fontMetrics.horizontalAdvance(name), self._NAME_MAX_PX)
+        info_w = option.fontMetrics.horizontalAdvance(info) if info else 0
+        gap = self._INFO_GAP + self._RIGHT_PAD if info else self._RIGHT_PAD
+        size.setWidth(name_w + info_w + gap)
+        return size
 
 
 class GroupedComboBox(NoScrollComboBox):
 
+    _POPUP_MIN_WIDTH = 320  # 弹出列表最小宽度，保证名字 + info 同行不挤
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setItemDelegate(_InfoDelegate(self))
+        self.view().setMinimumWidth(self._POPUP_MIN_WIDTH)
+        # 避免 combobox 关闭态被父布局压得过窄
+        self.setMinimumContentsLength(16)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
 
     def set_grouped_items(self, groups: list[tuple[str, list[tuple[str, str]]]]) -> None:
         self.clear()

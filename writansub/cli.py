@@ -29,7 +29,7 @@ def _progress_bar(pct: float, msg: str) -> None:
 
 
 def _log(msg: str) -> None:
-    sys.stderr.write(f"\r{'':<80}\r")  # 清掉进度条残留
+    sys.stderr.write(f"\r{'':<80}\r")
     sys.stderr.write(f"  {msg}\n")
     sys.stderr.flush()
 
@@ -43,8 +43,8 @@ def _setup_cancel_handler() -> None:
             sys.stderr.write("\n强制退出\n")
             sys.exit(1)
         reg.cancelled = True
-        reg.resume()  # 解除暂停让线程能退出
-        sys.stderr.write("\n正在取消...\n")
+        reg.resume()
+        sys.stderr.write("\n取消请求已发送，将在当前段结束后停止\n")
 
     signal.signal(signal.SIGINT, _handler)
 
@@ -161,10 +161,15 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         align_model=args.align_model,
         condition_on_prev=not args.no_cond_prev,
         vad_filter=args.vad,
+        initial_prompt=args.initial_prompt,
         tiger_mode=tiger_mode,
         mss_model=args.mss_model,
         ss_model=args.ss_model,
         save_intermediate=args.save_intermediate,
+        ref_srt=args.ref_srt,
+        use_ref_sub=args.ref_sub_track is not None,
+        ref_sub_track=args.ref_sub_track,
+        ref_direct=args.ref_direct,
         keep_whisper_srt=args.keep_whisper_srt,
         keep_aligned_srt=args.keep_aligned_srt,
         generate_review=args.review,
@@ -243,35 +248,54 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     from writansub.subtitle.srt_io import write_srt
     from writansub.subtitle.review import generate_review, write_review_files
 
-    media = args.file
-    output = args.output or os.path.splitext(media)[0] + ".srt"
+    files = args.files
+    if args.output and len(files) > 1:
+        _log("错误: -o/--output 只能用于单文件；多文件时输出自动命名为 <media>.srt")
+        sys.exit(1)
+
     wc = args.word_conf_threshold if args.word_conf_threshold is not None else PP_DEFAULTS["word_conf_threshold"]
 
     _setup_cancel_handler()
-    ResourceRegistry.instance().reset_controls()
+    reg = ResourceRegistry.instance()
+    reg.reset_controls()
+
+    def _w_factory():
+        from faster_whisper import WhisperModel
+        return WhisperModel(args.whisper_model, device=args.device, compute_type="int8")
+
+    wh = reg.acquire_model(f"whisper:{args.whisper_model}", args.device, _w_factory)
+    whisper_model = reg.get_model(wh)
 
     try:
-        subs, word_data = do_transcribe(
-            media, lang=args.lang, device=args.device,
-            log_callback=_log,
-            progress_callback=_progress_bar,
-            condition_on_previous_text=not args.no_cond_prev,
-            model_size=args.whisper_model,
-            vad_filter=args.vad,
-        )
+        for idx, media in enumerate(files, 1):
+            if len(files) > 1:
+                _log(f"── [{idx}/{len(files)}] {os.path.basename(media)} ──")
+            output = args.output or os.path.splitext(media)[0] + ".srt"
 
-        if wc > 0.0:
-            srt_c, ass_c, low_c, tot_w = generate_review(subs, word_data, wc)
-            if low_c > 0:
-                base = os.path.splitext(media)[0]
-                write_review_files(base, srt_c, ass_c)
-                _log(f"低置信词 {low_c}/{tot_w}，已生成标记版")
+            subs, word_data = do_transcribe(
+                media, lang=args.lang, device=args.device,
+                log_callback=_log,
+                progress_callback=_progress_bar,
+                condition_on_previous_text=not args.no_cond_prev,
+                model=whisper_model,
+                vad_filter=args.vad,
+                initial_prompt=args.initial_prompt,
+            )
 
-        write_srt(subs, output)
-        _log(f"完成! 输出: {output}")
+            if wc > 0.0:
+                srt_c, ass_c, low_c, tot_w = generate_review(subs, word_data, wc)
+                if low_c > 0:
+                    base = os.path.splitext(media)[0]
+                    write_review_files(base, srt_c, ass_c)
+                    _log(f"低置信词 {low_c}/{tot_w}，已生成标记版")
+
+            write_srt(subs, output)
+            _log(f"完成! 输出: {output}")
     except CancelledError:
         _log("识别已取消")
         sys.exit(1)
+    finally:
+        reg.release_model(wh)
 
 
 def cmd_align(args: argparse.Namespace) -> None:
@@ -282,9 +306,14 @@ def cmd_align(args: argparse.Namespace) -> None:
         init_qwen3_model, run_qwen3_alignment,
     )
 
-    audio = args.audio
-    srt = args.srt
-    output = args.output or os.path.splitext(srt)[0] + "_aligned.srt"
+    audios = args.audio
+    srts = args.srt
+    if len(audios) != len(srts):
+        _log(f"错误: --audio 和 --srt 数量不一致 ({len(audios)} vs {len(srts)})")
+        sys.exit(1)
+    if args.output and len(audios) > 1:
+        _log("错误: -o/--output 只能用于单对；多对时输出自动命名为 <srt>_aligned.srt")
+        sys.exit(1)
 
     file_cfg = _load_config_file(args.config)
     pp = _resolve_pp(args, file_cfg)
@@ -304,48 +333,56 @@ def cmd_align(args: argparse.Namespace) -> None:
             _log("CUDA 不可用，回退到 CPU")
             device = "cpu"
 
-        _progress_bar(0.0, "加载音频...")
-        waveform = load_audio(audio)
-
-        _progress_bar(0.05, "解析字幕...")
-        subs = parse_srt(srt, lang=args.lang)
-        _log(f"字幕条数: {len(subs)}")
-
-        _progress_bar(0.1, "加载模型...")
-
+        # 模型只加载一次，跨所有文件复用
+        _log("加载对齐模型...")
         if args.align_model == "qwen3-fa-0.6b":
-            qwen3_model = init_qwen3_model(device)
-            model_handle = reg.register_model("qwen3_fa", qwen3_model, device)
-
-            aligned = run_qwen3_alignment(
-                waveform, subs, device=device, pad_sec=pad_sec,
-                progress_callback=lambda p, m: _progress_bar(0.1 + p * 0.85, m),
-                model=qwen3_model, lang=args.lang,
-                log_callback=_log,
-            )
+            model_handle = reg.acquire_model("qwen3_fa", device, lambda: init_qwen3_model(device))
+            qwen3_model = reg.get_model(model_handle)
+            model_bundle = None
         else:
-            model_bundle = init_model(device)
-            model_handle = reg.register_model("mms_fa", model_bundle, device)
+            model_handle = reg.acquire_model("mms_fa", device, lambda: init_model(device))
+            model_bundle = reg.get_model(model_handle)
+            qwen3_model = None
 
-            aligned = run_alignment(
-                waveform, subs, device=device, pad_sec=pad_sec,
-                progress_callback=lambda p, m: _progress_bar(0.1 + p * 0.85, m),
-                model_bundle=model_bundle,
-                log_callback=_log,
-            )
+        for idx, (audio, srt) in enumerate(zip(audios, srts), 1):
+            if len(audios) > 1:
+                _log(f"── [{idx}/{len(audios)}] {os.path.basename(audio)} ──")
+            output = args.output or os.path.splitext(srt)[0] + "_aligned.srt"
 
-        _progress_bar(0.95, "后处理...")
-        final = post_process(aligned, **pp)
+            _progress_bar(0.0, "加载音频...")
+            waveform = load_audio(audio)
 
-        write_srt(final, output)
-        _progress_bar(1.0, "对齐完成")
-        _log(f"完成! 输出: {output}")
+            _progress_bar(0.05, "解析字幕...")
+            subs = parse_srt(srt, lang=args.lang)
+            _log(f"字幕条数: {len(subs)}")
+
+            if args.align_model == "qwen3-fa-0.6b":
+                aligned = run_qwen3_alignment(
+                    waveform, subs, device=device, pad_sec=pad_sec,
+                    progress_callback=lambda p, m: _progress_bar(0.1 + p * 0.85, m),
+                    model=qwen3_model, lang=args.lang,
+                    log_callback=_log,
+                )
+            else:
+                aligned = run_alignment(
+                    waveform, subs, device=device, pad_sec=pad_sec,
+                    progress_callback=lambda p, m: _progress_bar(0.1 + p * 0.85, m),
+                    model_bundle=model_bundle,
+                    log_callback=_log,
+                )
+
+            _progress_bar(0.95, "后处理...")
+            final = post_process(aligned, **pp)
+
+            write_srt(final, output)
+            _progress_bar(1.0, "对齐完成")
+            _log(f"完成! 输出: {output}")
     except CancelledError:
         _log("对齐已取消")
         sys.exit(1)
     finally:
         if model_handle is not None:
-            reg.unload_model(model_handle)
+            reg.release_model(model_handle)
 
 
 def cmd_translate(args: argparse.Namespace) -> None:
@@ -408,14 +445,20 @@ def build_parser() -> argparse.ArgumentParser:
                         choices=["mms_fa", "qwen3-fa-0.6b"], help="对齐模型 (默认: mms_fa)")
     p_pipe.add_argument("--no-cond-prev", action="store_true", help="禁用前文调优")
     p_pipe.add_argument("--vad", action="store_true", help="启用 VAD 跳过静音段")
-    # 预处理
+    p_pipe.add_argument("--initial-prompt", default=None,
+                        help="Whisper 初始提示 (人名/术语词典，≤224 token)")
     g_tiger = p_pipe.add_argument_group("预处理")
     g_tiger.add_argument("--denoise", action="store_true", help="启用 DnR 降噪")
     g_tiger.add_argument("--separate", action="store_true", help="启用说话人分离 (含降噪)")
     g_tiger.add_argument("--mss-model", default="tiger-dnr", help="降噪模型 (默认: tiger-dnr)")
     g_tiger.add_argument("--ss-model", default="tiger-speech", help="分轨模型 (默认: tiger-speech)")
     g_tiger.add_argument("--save-intermediate", action="store_true", help="保存中间音轨")
-    # 输出
+    g_ref = p_pipe.add_argument_group("参考字幕")
+    g_ref.add_argument("--ref-srt", default=None, help="外部参考 SRT 文件路径 (时间轴参考)")
+    g_ref.add_argument("--ref-sub-track", type=int, default=None,
+                       help="内嵌字幕轨索引 (默认: 按语言自动匹配)")
+    g_ref.add_argument("--ref-direct", action="store_true",
+                       help="直接使用参考时间轴，跳过强制对齐")
     g_out = p_pipe.add_argument_group("输出")
     g_out.add_argument("--keep-whisper-srt", action="store_true", help="保留 Whisper 原始 SRT")
     g_out.add_argument("--keep-aligned-srt", action="store_true", help="保留对齐 SRT")
@@ -436,23 +479,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre.set_defaults(func=cmd_preprocess)
 
     # ── transcribe ──
-    p_tr = sub.add_parser("transcribe", help="语音识别")
-    p_tr.add_argument("file", help="媒体文件路径")
-    p_tr.add_argument("-o", "--output", help="输出 SRT 路径 (默认: 同名.srt)")
+    p_tr = sub.add_parser("transcribe", help="语音识别 (支持多文件批处理)")
+    p_tr.add_argument("files", nargs="+", help="媒体文件路径 (可多个)")
+    p_tr.add_argument("-o", "--output", help="输出 SRT 路径 (仅单文件可用；多文件时自动命名为 <media>.srt)")
     _add_lang_arg(p_tr)
     _add_device_arg(p_tr)
     p_tr.add_argument("--whisper-model", default="large-v3", help="Whisper 模型 (默认: large-v3)")
     p_tr.add_argument("--no-cond-prev", action="store_true", help="禁用前文调优")
     p_tr.add_argument("--vad", action="store_true", help="启用 VAD 跳过静音段")
+    p_tr.add_argument("--initial-prompt", default=None,
+                      help="Whisper 初始提示 (人名/术语词典，≤224 token)")
     p_tr.add_argument("--word-conf-threshold", type=float, default=None,
                       help=f"识别置信阈值 (默认: {PP_DEFAULTS['word_conf_threshold']})")
     p_tr.set_defaults(func=cmd_transcribe)
 
     # ── align ──
-    p_al = sub.add_parser("align", help="强制打轴")
-    p_al.add_argument("--audio", required=True, help="音频文件路径")
-    p_al.add_argument("--srt", required=True, help="输入 SRT 字幕路径")
-    p_al.add_argument("-o", "--output", help="输出 SRT 路径 (默认: _aligned.srt)")
+    p_al = sub.add_parser("align", help="强制打轴 (支持多对批处理)")
+    p_al.add_argument("--audio", required=True, nargs="+", help="音频文件路径 (可多个)")
+    p_al.add_argument("--srt", required=True, nargs="+", help="输入 SRT 字幕路径 (可多个，与 --audio 一一对应)")
+    p_al.add_argument("-o", "--output", help="输出 SRT 路径 (仅单对可用；多对时自动命名为 <srt>_aligned.srt)")
     p_al.add_argument("--config", help="JSON 配置文件")
     _add_lang_arg(p_al)
     _add_device_arg(p_al)

@@ -135,7 +135,7 @@ def separate_dnr(
     results = []
     try:
         for i, (sub_model, name, idx) in enumerate(tracks):
-            reg.checkpoint()  # 暂停 / 取消
+            reg.checkpoint()
             _log(f"正在分离 {name} ({i + 1}/3) ...")
             _progress(i / 3.0, f"正在分离 {name}...")
             track = model.wav_chunk_inference(sub_model, mixture)[idx]
@@ -184,13 +184,12 @@ def _chunk_inference(
     reg = ResourceRegistry.instance()
 
     for i in range(num_chunks):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
         chunk = padded[:, :, i * hop:i * hop + chunk_size]
         curr_len = chunk.shape[-1]
         if curr_len < chunk_size:
             chunk = torch.cat([chunk, zero_pad[:, :, :chunk_size - curr_len]], dim=-1)
 
-        # 逐块推理，不进行批量拼接
         with torch.no_grad():
             est = model(chunk).unsqueeze(2)  # [1, n_tracks, 1, T]
 
@@ -250,7 +249,6 @@ def separate_speakers_tfgridnet(
     model_sr = 8000
     out_sr = 16000
 
-    # 重采样到模型输入采样率
     wav = T.Resample(dialog_sr, model_sr)(dialog_wav)
     if wav.dim() == 1:
         wav = wav.unsqueeze(0)
@@ -264,14 +262,12 @@ def separate_speakers_tfgridnet(
     def _factory() -> Any:
         from espnet2.bin.enh_inference import SeparateSpeech
 
-        # 检查本地模型
         local_base = os.path.join(
             MODELS_DIR, "tfgridnet",
             "models--espnet--yoshiki_wsj0_2mix_spatialized_enh_tfgridnet_waspaa2023_raw",
         )
         snapshot_dir = os.path.join(local_base, "snapshots")
         if os.path.isdir(snapshot_dir):
-            # 取最新 snapshot
             snaps = os.listdir(snapshot_dir)
             if snaps:
                 snap = os.path.join(snapshot_dir, snaps[0])
@@ -305,7 +301,7 @@ def separate_speakers_tfgridnet(
         if spk1.dim() == 1:
             spk1 = spk1.unsqueeze(0)  # [1, T]
         elif spk1.dim() > 1:
-            spk1 = spk1.mean(dim=0, keepdim=True)  # 多声道→单声道
+            spk1 = spk1.mean(dim=0, keepdim=True)
         if spk2.dim() == 1:
             spk2 = spk2.unsqueeze(0)
         elif spk2.dim() > 1:
@@ -408,7 +404,7 @@ def run_dnr_batch(
     total = len(media_files)
 
     for idx, media in enumerate(media_files):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
         file_info = f"[{idx + 1}/{total}]"
         _file_progress = _make_file_progress(idx, total, progress_callback)
 
@@ -455,7 +451,7 @@ def run_speech_batch(
     total = len(media_list)
 
     for idx, media in enumerate(media_list):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
         data = dnr_results[media]
         _file_progress = _make_file_progress(idx, total, progress_callback)
 

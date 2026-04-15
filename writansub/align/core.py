@@ -221,7 +221,7 @@ def run_alignment(
     total_subs = len(subs)
 
     for i, sub in enumerate(subs):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
 
         if progress_callback:
             progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")

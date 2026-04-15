@@ -1,5 +1,3 @@
-"""预处理页：TIGER 降噪 / 说话人分轨"""
-
 import os
 import threading
 
@@ -17,12 +15,10 @@ from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, G
 
 
 class _TigerSignals(QObject):
-    """线程安全的信号"""
     finished = Signal()
 
 
 class TigerTab(StateMixin, QWidget):
-    """Tab 2: TIGER 音频预处理（降噪 / 说话人分轨）"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -46,7 +42,6 @@ class TigerTab(StateMixin, QWidget):
         top_layout = QVBoxLayout(top_widget)
         top_layout.setContentsMargins(12, 12, 12, 12)
 
-        # 输入文件
         card_file = QGroupBox("输入文件")
         top_layout.addWidget(card_file)
         file_layout = QHBoxLayout(card_file)
@@ -69,7 +64,6 @@ class TigerTab(StateMixin, QWidget):
         btn_col.addWidget(btn_clear)
         btn_col.addStretch()
 
-        # TIGER 设置
         card_tiger = QGroupBox("TIGER 设置")
         top_layout.addWidget(card_tiger)
         tiger_layout = QHBoxLayout(card_tiger)
@@ -150,7 +144,6 @@ class TigerTab(StateMixin, QWidget):
 
         splitter.addWidget(bottom_widget)
 
-        # 默认比例：上 3 下 1
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
@@ -285,7 +278,6 @@ class TigerTab(StateMixin, QWidget):
         try:
             total_phases = 2 if do_separate else 1
 
-            # DnR 降噪
             log(f"── 阶段 1/{total_phases}: DnR 降噪 ──")
 
             def _dnr_progress(pct, msg):
@@ -300,7 +292,6 @@ class TigerTab(StateMixin, QWidget):
                 progress_callback=_dnr_progress,
             )
 
-            # 说话人分轨
             if do_separate and tiger_results:
                 log(f"── 阶段 2/{total_phases}: 说话人分轨 ──")
 

@@ -72,12 +72,12 @@ class WordInfo(NamedTuple):
 @dataclass
 class Sub:
     index: int
-    start: float          # 秒
-    end: float            # 秒
-    text: str             # 原始文本
+    start: float
+    end: float
+    text: str
     romaji: str = ""      # 罗马音（用于 alignment）
-    score: float = 0.0    # 对齐置信度
-    translated: str = ""  # 翻译文本
+    score: float = 0.0
+    translated: str = ""
 
 
 def fmt_srt_time(seconds: float) -> str:
@@ -94,5 +94,4 @@ def fmt_ass_time(seconds: float) -> str:
     m, rem = divmod(rem, 6_000)
     s, cs = divmod(rem, 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
-
 

@@ -14,8 +14,8 @@ def transcribe(
     model_size: str = "large-v3",
     cancelled: Callable[[], bool] | None = None,
     vad_filter: bool = False,
+    initial_prompt: str | None = None,
 ) -> tuple[list[Sub], list[list[WordInfo]]]:
-    """返回 (subs, word_data)。model 为 None 时内部创建。"""
     from writansub.bridge import ResourceRegistry, CancelledError
 
     _log = log_callback or (lambda msg: None)
@@ -25,11 +25,12 @@ def transcribe(
         if progress_callback:
             progress_callback(min(pct, 1.0), msg)
 
-    own_model = model is None
-    _progress(0.0, "加载模型..." if own_model else "开始识别...")
-    if own_model:
+    if model is None:
+        _progress(0.0, "加载模型...")
         from faster_whisper import WhisperModel
         model = WhisperModel(model_size, device=device, compute_type="int8")
+    else:
+        _progress(0.0, "开始识别...")
 
     _progress(0.02, "识别中...")
     segments, info = model.transcribe(
@@ -38,13 +39,14 @@ def transcribe(
         word_timestamps=True,
         condition_on_previous_text=condition_on_previous_text,
         vad_filter=vad_filter,
+        initial_prompt=initial_prompt or None,
     )
 
     subs: list[Sub] = []
     word_data: list[list[WordInfo]] = []
 
     for i, seg in enumerate(segments, 1):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
 
         subs.append(Sub(
             index=i,
@@ -64,10 +66,6 @@ def transcribe(
             f"识别中... {i} 条",
         )
 
-    if own_model:
-        del model
-
     _progress(1.0, "识别完成")
     return subs, word_data
-
 
