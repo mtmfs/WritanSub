@@ -42,7 +42,6 @@ def load_model_meta(model_name: str, model_dir: str = "") -> dict[str, Any]:
 
 
 def init_model(model_name: str, device: str, model_dir: str = "") -> Any:
-    """加载模型，返回模型对象。"""
     if model_name == "mms_fa":
         from writansub.align.core import init_model as _init_mms
         return _init_mms(device)
@@ -54,7 +53,6 @@ def init_model(model_name: str, device: str, model_dir: str = "") -> Any:
 
 
 def _init_sbv2(model_dir: str, device: str):
-    """加载 Style-Bert-VITS2 JP-Extra 模型。"""
     from style_bert_vits2.nlp import bert_models
     from style_bert_vits2.constants import Languages
     from style_bert_vits2.tts_model import TTSModel
@@ -63,7 +61,6 @@ def _init_sbv2(model_dir: str, device: str):
     bert_models.load_model(Languages.JP, "ku-nlp/deberta-v2-large-japanese-char-wwm")
     bert_models.load_tokenizer(Languages.JP, "ku-nlp/deberta-v2-large-japanese-char-wwm")
 
-    # 查找 safetensors 文件
     safetensors = None
     for name in os.listdir(model_dir):
         if name.endswith(".safetensors"):
@@ -94,7 +91,6 @@ def run_mms_fa(
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> list[Sub]:
-    """MMS_FA 路径：音频 + SRT → 对齐后的 list[Sub]。"""
     from writansub.align.core import load_audio, run_alignment, post_process
 
     _log = log_callback or (lambda msg: None)
@@ -143,7 +139,6 @@ def run_sbv2(
 
     _log = log_callback or (lambda msg: None)
 
-    # 获取 sample_rate 和 speaker_id
     sr = model.hyper_parameters.data.sampling_rate
     spk2id = model.hyper_parameters.data.spk2id if hasattr(model.hyper_parameters.data, "spk2id") else {}
     speaker_id = spk2id.get(speaker, 0) if speaker else 0

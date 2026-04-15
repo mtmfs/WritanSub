@@ -51,7 +51,7 @@ def translate_subs(
     fail_count = 0
 
     for batch_start in range(0, total, batch_size):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
 
         batch_end = min(batch_start + batch_size, total)
         batch = subs[batch_start:batch_end]
@@ -95,7 +95,6 @@ def translate_subs(
                     current_idx = int(match.group(1))
                     translated[current_idx] = match.group(2).strip()
                 elif current_idx is not None:
-                    # 非编号行追加到上一条翻译
                     translated[current_idx] += " " + line
         except Exception as e:
             fail_count += 1
@@ -112,5 +111,4 @@ def translate_subs(
         msg += f" ({fail_count} 个批次失败)"
     _log(msg)
     return subs
-
 

@@ -1,5 +1,3 @@
-"""公共数据类型：Sub 字幕结构体、语言列表、文件类型常量、时间格式化"""
-
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -67,25 +65,22 @@ TRANSLATE_TARGETS = [
 
 
 class WordInfo(NamedTuple):
-    """词级别识别信息，用于 review 标记"""
     word: str
     probability: float
 
 
 @dataclass
 class Sub:
-    """一条字幕"""
     index: int
-    start: float          # 秒
-    end: float            # 秒
-    text: str             # 原始文本
+    start: float
+    end: float
+    text: str
     romaji: str = ""      # 罗马音（用于 alignment）
-    score: float = 0.0    # 对齐置信度
-    translated: str = ""  # 翻译文本
+    score: float = 0.0
+    translated: str = ""
 
 
 def fmt_srt_time(seconds: float) -> str:
-    """秒 → SRT 时间格式 HH:MM:SS,mmm"""
     total_ms = max(0, round(seconds * 1000))
     h, rem = divmod(total_ms, 3_600_000)
     m, rem = divmod(rem, 60_000)
@@ -94,11 +89,9 @@ def fmt_srt_time(seconds: float) -> str:
 
 
 def fmt_ass_time(seconds: float) -> str:
-    """秒 → ASS 时间格式 H:MM:SS.cc"""
     total_cs = max(0, round(seconds * 100))
     h, rem = divmod(total_cs, 360_000)
     m, rem = divmod(rem, 6_000)
     s, cs = divmod(rem, 100)
     return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
-
 

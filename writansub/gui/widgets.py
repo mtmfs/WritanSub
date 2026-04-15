@@ -1,11 +1,9 @@
-"""通用 PySide6 控件：日志区、进度条、滚动容器、参数面板"""
-
 import io
 
 from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
     QHBoxLayout, QDoubleSpinBox, QGridLayout, QFrame,
-    QScrollArea, QComboBox, QStyledItemDelegate,
+    QScrollArea, QComboBox, QStyledItemDelegate, QStyleOptionViewItem,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QPalette
@@ -27,7 +25,6 @@ class StateMixin:
     """
 
     def _save_now(self):
-        """立即持久化当前 tab 状态到 gui_state.json"""
         state = load_gui_state()
         state.update(self.save_state())
         save_gui_state(state)
@@ -63,12 +60,10 @@ class _NoScrollMixin:
 
 
 class _LogSignal(QObject):
-    """线程安全的日志信号"""
     message = Signal(str)
 
 
 class LogWidget(QTextEdit):
-    """日志显示区域，支持线程安全追加"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,7 +72,6 @@ class LogWidget(QTextEdit):
         self._signal.message.connect(self._append)
 
     def log(self, msg: str) -> None:
-        """线程安全地追加日志（带换行）"""
         self._signal.message.emit(msg)
 
     def _append(self, msg: str) -> None:
@@ -91,7 +85,6 @@ class LogWidget(QTextEdit):
 
 
 class TextRedirector(io.TextIOBase):
-    """将 print 输出重定向到 LogWidget"""
 
     def __init__(self, log_widget: LogWidget):
         super().__init__()
@@ -110,12 +103,10 @@ class TextRedirector(io.TextIOBase):
 
 
 class _ProgressSignal(QObject):
-    """线程安全的进度信号"""
     progress = Signal(float, str)
 
 
 class ProgressWidget(QWidget):
-    """进度条 + 状态标签"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -138,7 +129,6 @@ class ProgressWidget(QWidget):
         self._signal.progress.connect(self._update)
 
     def update_progress(self, pct: float, msg: str) -> None:
-        """线程安全地更新进度"""
         self._signal.progress.emit(pct, msg)
 
     def _update(self, pct: float, msg: str) -> None:
@@ -156,7 +146,6 @@ class ProgressWidget(QWidget):
 
 
 class ScrollableFrame(QScrollArea):
-    """可垂直滚动的容器，内容放入 self.inner"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -176,18 +165,46 @@ class NoScrollComboBox(_NoScrollMixin, QComboBox):
 
 
 class _InfoDelegate(QStyledItemDelegate):
-    """下拉项代理：基类正常绘制，仅在右侧追加附加信息。"""
+
+    _INFO_GAP = 16          # name 与 info 之间最小间距
+    _RIGHT_PAD = 8          # info 右侧留白
+    _NAME_MAX_PX = 240      # name 区最大显示宽度，超出 elide
 
     def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-        info = index.data(Qt.UserRole + 1)
-        if not info:
-            return
-        painter.save()
-        rect = option.rect.adjusted(0, 0, -8, 0)
-        painter.setPen(option.palette.color(QPalette.ColorRole.Text))
-        painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, info)
-        painter.restore()
+        info = index.data(Qt.UserRole + 1) or ""
+        info_width = option.fontMetrics.horizontalAdvance(info) if info else 0
+        reserved = info_width + self._INFO_GAP + self._RIGHT_PAD if info else 0
+
+        # 给基类绘制名字的区域：原 rect 右边扣掉 info 占位
+        opt = QStyleOptionViewItem(option)
+        opt.rect = option.rect.adjusted(0, 0, -reserved, 0)
+        name = index.data(Qt.DisplayRole) or ""
+        max_name_width = min(opt.rect.width(), self._NAME_MAX_PX)
+        elided = option.fontMetrics.elidedText(name, Qt.ElideMiddle, max_name_width)
+        if elided != name:
+            opt.text = elided
+            # 用 model index 的 displayText override 不方便，直接靠 super().paint 用 opt.text
+        super().paint(painter, opt, index)
+
+        if info:
+            painter.save()
+            painter.setPen(option.palette.color(QPalette.ColorRole.Text))
+            painter.drawText(
+                option.rect.adjusted(0, 0, -self._RIGHT_PAD, 0),
+                Qt.AlignRight | Qt.AlignVCenter,
+                info,
+            )
+            painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        name = index.data(Qt.DisplayRole) or ""
+        info = index.data(Qt.UserRole + 1) or ""
+        name_w = min(option.fontMetrics.horizontalAdvance(name), self._NAME_MAX_PX)
+        info_w = option.fontMetrics.horizontalAdvance(info) if info else 0
+        gap = self._INFO_GAP + self._RIGHT_PAD if info else self._RIGHT_PAD
+        size.setWidth(name_w + info_w + gap)
+        return size
 
 
 class GroupedComboBox(NoScrollComboBox):
@@ -198,9 +215,15 @@ class GroupedComboBox(NoScrollComboBox):
     分组标题不可选，仅作为视觉分隔。
     """
 
+    _POPUP_MIN_WIDTH = 320  # 弹出列表最小宽度，保证名字 + info 同行不挤
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setItemDelegate(_InfoDelegate(self))
+        self.view().setMinimumWidth(self._POPUP_MIN_WIDTH)
+        # 避免 combobox 关闭态被父布局压得过窄
+        self.setMinimumContentsLength(16)
+        self.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
 
     def set_grouped_items(self, groups: list[tuple[str, list[tuple[str, str]]]]) -> None:
         self.clear()

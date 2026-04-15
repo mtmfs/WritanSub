@@ -3,7 +3,7 @@ import threading
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout,
-    QListWidget, QPushButton, QLabel, QCheckBox,
+    QListWidget, QPushButton, QLabel, QCheckBox, QLineEdit,
     QFileDialog, QAbstractItemView,
 )
 from PySide6.QtCore import Signal, QObject
@@ -18,7 +18,6 @@ from writansub.gui.widgets import (
 
 
 class _PipelineSignals(QObject):
-    """线程间信号传输"""
     finished = Signal()
     enable_start = Signal(bool)
     log_requested = Signal(str)
@@ -26,7 +25,6 @@ class _PipelineSignals(QObject):
 
 
 class PipelineTab(StateMixin, QWidget):
-    """Tab 1: 核心流水线 - 纯布局调整版"""
 
     _PP_KEYS = [
         "extend_end", "extend_start", "gap_threshold",
@@ -65,7 +63,6 @@ class PipelineTab(StateMixin, QWidget):
         self._build_log_section()
 
     def _build_file_section(self):
-        """1. 媒体文件区"""
         self.card_file = QGroupBox("媒体文件列表")
         file_layout = QHBoxLayout(self.card_file)
 
@@ -90,10 +87,8 @@ class PipelineTab(StateMixin, QWidget):
         self._main_layout.addWidget(self.card_file)
 
     def _build_config_section(self):
-        """2. 中间三列配置区"""
         config_layout = QHBoxLayout()
 
-        # 模型配置
         self.card_basic = QGroupBox("模型配置")
         basic_layout = QGridLayout(self.card_basic)
         basic_layout.addWidget(QLabel("识别语言:"), 0, 0)
@@ -120,9 +115,18 @@ class PipelineTab(StateMixin, QWidget):
         self._chk_vad = QCheckBox("跳过静音 (VAD)")
         self._chk_vad.setToolTip("启用 Silero VAD 跳过静音段，加速识别\n（启用 TIGER 预处理时建议关闭）")
         basic_layout.addWidget(self._chk_vad, 4, 1)
+        basic_layout.addWidget(QLabel("初始提示:"), 5, 0)
+        self._prompt_edit = QLineEdit()
+        self._prompt_edit.setPlaceholderText("人名、术语（≤224 token）")
+        self._prompt_edit.setToolTip(
+            "Whisper initial_prompt：传给模型的上下文偏好，\n"
+            "用于让角色名/专有名词保持一致写法。\n"
+            "例如：瀬尾拓也、伊地知琴子、天音ケイ、キラモン\n"
+            "上限约 224 token，过长会被截断。"
+        )
+        basic_layout.addWidget(self._prompt_edit, 5, 1)
         config_layout.addWidget(self.card_basic)
 
-        # 预处理配置
         self.card_tiger = QGroupBox("预处理增强")
         tiger_layout = QVBoxLayout(self.card_tiger)
         self._chk_tiger_denoise = QCheckBox("人声去噪 (DnR)")
@@ -153,7 +157,6 @@ class PipelineTab(StateMixin, QWidget):
         tiger_layout.addStretch()
         config_layout.addWidget(self.card_tiger)
 
-        # 输出配置
         self.card_retention = QGroupBox("输出保留")
         ret_layout = QVBoxLayout(self.card_retention)
         self._chk_whisper = QCheckBox("保留 Whisper SRT")
@@ -165,17 +168,43 @@ class PipelineTab(StateMixin, QWidget):
         ret_layout.addStretch()
         config_layout.addWidget(self.card_retention)
 
+        self.card_ref = QGroupBox("参考字幕")
+        ref_layout = QVBoxLayout(self.card_ref)
+        self._chk_ref_sub = QCheckBox("参考内嵌字幕")
+        self._chk_ref_sub.setToolTip(
+            "从视频中提取内嵌字幕的时间轴作为参考\n"
+            "Whisper 文本会映射到内嵌字幕的时间窗口上"
+        )
+        ref_layout.addWidget(self._chk_ref_sub)
+
+        ref_srt_row = QHBoxLayout()
+        self._ref_srt_label = QLabel("无")
+        self._ref_srt_label.setToolTip("指定外部 SRT 文件后，优先使用外部文件而非内嵌字幕")
+        self._ref_srt_path: str = ""
+        btn_ref_srt = QPushButton("外部SRT")
+        btn_ref_srt.clicked.connect(self._browse_ref_srt)
+        btn_ref_clear = QPushButton("清除")
+        btn_ref_clear.clicked.connect(self._clear_ref_srt)
+        ref_srt_row.addWidget(self._ref_srt_label, 1)
+        ref_srt_row.addWidget(btn_ref_srt)
+        ref_srt_row.addWidget(btn_ref_clear)
+        ref_layout.addLayout(ref_srt_row)
+
+        self._chk_ref_direct = QCheckBox("直接使用参考轴")
+        self._chk_ref_direct.setToolTip("跳过强制对齐，直接使用参考字幕的时间轴")
+        ref_layout.addWidget(self._chk_ref_direct)
+        ref_layout.addStretch()
+        config_layout.addWidget(self.card_ref)
+
         self._main_layout.addLayout(config_layout)
 
     def _build_pp_section(self):
-        """3. 后处理参数 (横向排列)"""
         self.card_pp = QGroupBox("后处理参数")
         QGridLayout(self.card_pp)
         self._pp_vars = build_params_grid(self.card_pp, self._PP_KEYS)
         self._main_layout.addWidget(self.card_pp)
 
     def _build_action_section(self):
-        """4. 底部控制区"""
         action_layout = QHBoxLayout()
         self._chk_translate = QCheckBox("AI 翻译")
         action_layout.addWidget(self._chk_translate)
@@ -201,7 +230,6 @@ class PipelineTab(StateMixin, QWidget):
         self._main_layout.addSpacing(10)
 
     def _build_log_section(self):
-        """5. 可折叠日志区"""
         toggle_layout = QHBoxLayout()
         self._btn_toggle_log = QPushButton("▶ 查看日志")
         self._btn_toggle_log.setFlat(True)
@@ -222,6 +250,7 @@ class PipelineTab(StateMixin, QWidget):
         self._whisper_device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
         self._chk_vad.stateChanged.connect(self._auto_save)
+        self._prompt_edit.editingFinished.connect(self._auto_save)
         self._align_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_whisper.stateChanged.connect(self._auto_save)
         self._chk_force_align.stateChanged.connect(self._auto_save)
@@ -232,6 +261,8 @@ class PipelineTab(StateMixin, QWidget):
         self._chk_tiger_separate.stateChanged.connect(self._auto_save)
         self._ss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_tiger_save.stateChanged.connect(self._auto_save)
+        self._chk_ref_sub.stateChanged.connect(self._auto_save)
+        self._chk_ref_direct.stateChanged.connect(self._auto_save)
 
     def save_state(self) -> dict:
         return {
@@ -240,6 +271,7 @@ class PipelineTab(StateMixin, QWidget):
             "pipeline.whisper_device": self._whisper_device_combo.currentText(),
             "pipeline.cond_prev": self._chk_cond_prev.isChecked(),
             "pipeline.vad_filter": self._chk_vad.isChecked(),
+            "pipeline.initial_prompt": self._prompt_edit.text(),
             "pipeline.align_model": self._align_model_combo.currentName(),
             "pipeline.retain_whisper": self._chk_whisper.isChecked(),
             "pipeline.retain_align": self._chk_force_align.isChecked(),
@@ -250,6 +282,9 @@ class PipelineTab(StateMixin, QWidget):
             "pipeline.tiger_separate": self._chk_tiger_separate.isChecked(),
             "pipeline.ss_model": self._ss_model_combo.currentName(),
             "pipeline.tiger_save": self._chk_tiger_save.isChecked(),
+            "pipeline.ref_sub": self._chk_ref_sub.isChecked(),
+            "pipeline.ref_srt_path": self._ref_srt_path,
+            "pipeline.ref_direct": self._chk_ref_direct.isChecked(),
             "pipeline.media_files": list(self._media_files),
         }
 
@@ -264,6 +299,8 @@ class PipelineTab(StateMixin, QWidget):
             self._chk_cond_prev.setChecked(state["pipeline.cond_prev"])
         if "pipeline.vad_filter" in state:
             self._chk_vad.setChecked(state["pipeline.vad_filter"])
+        if "pipeline.initial_prompt" in state:
+            self._prompt_edit.setText(state["pipeline.initial_prompt"])
         if "pipeline.align_model" in state:
             self._align_model_combo.setCurrentName(state["pipeline.align_model"])
         if "pipeline.retain_whisper" in state:
@@ -284,6 +321,16 @@ class PipelineTab(StateMixin, QWidget):
             self._ss_model_combo.setCurrentName(state["pipeline.ss_model"])
         if "pipeline.tiger_save" in state:
             self._chk_tiger_save.setChecked(state["pipeline.tiger_save"])
+        if "pipeline.ref_sub" in state:
+            self._chk_ref_sub.setChecked(state["pipeline.ref_sub"])
+        if "pipeline.ref_srt_path" in state and state["pipeline.ref_srt_path"]:
+            p = state["pipeline.ref_srt_path"]
+            if os.path.isfile(p):
+                self._ref_srt_path = p
+                self._ref_srt_label.setText(os.path.basename(p))
+                self._ref_srt_label.setToolTip(p)
+        if "pipeline.ref_direct" in state:
+            self._chk_ref_direct.setChecked(state["pipeline.ref_direct"])
         if "pipeline.media_files" in state:
             for p in state["pipeline.media_files"]:
                 if p not in self._media_files and os.path.isfile(p):
@@ -322,6 +369,23 @@ class PipelineTab(StateMixin, QWidget):
         self._file_list.clear()
         self._media_files.clear()
 
+    def _browse_ref_srt(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择参考 SRT 文件", "",
+            "SRT 字幕 (*.srt);;全部 (*.*)",
+        )
+        if path:
+            self._ref_srt_path = path
+            self._ref_srt_label.setText(os.path.basename(path))
+            self._ref_srt_label.setToolTip(path)
+            self._auto_save()
+
+    def _clear_ref_srt(self):
+        self._ref_srt_path = ""
+        self._ref_srt_label.setText("无")
+        self._ref_srt_label.setToolTip("指定外部 SRT 文件后，优先使用外部文件而非内嵌字幕")
+        self._auto_save()
+
     # ── UI 回调 ──
 
     def _toggle_log(self):
@@ -354,8 +418,8 @@ class PipelineTab(StateMixin, QWidget):
     def _cancel(self):
         reg = ResourceRegistry.instance()
         reg.cancelled = True
-        reg.resume()  # 解除暂停让线程能退出
-        self._signals.log_requested.emit("正在取消任务...")
+        reg.resume()
+        self._signals.log_requested.emit("取消请求已发送，将在当前段结束后停止")
 
     # ── 流水线启动 ──
 
@@ -378,62 +442,30 @@ class PipelineTab(StateMixin, QWidget):
         self._log.clear_log()
         self._progress.reset()
 
-        device = self._whisper_device_combo.currentText()
-        model_size = self._model_combo.currentName()
-        align_model = self._align_model_combo.currentName()
-        enable_translate = self._chk_translate.isChecked()
+        from writansub.pipeline.runner import PipelineConfig
 
-        thread = threading.Thread(
-            target=self._run_pipeline,
-            args=(
-                list(self._media_files),
-                self._lang_combo.currentText(),
-                device,
-                model_size,
-                align_model,
-                {
-                    "whisper": self._chk_whisper.isChecked(),
-                    "force_align": self._chk_force_align.isChecked(),
-                    "review": self._chk_review.isChecked(),
-                },
-                {k: v.value() for k, v in self._pp_vars.items()},
-                self._chk_cond_prev.isChecked(),
-                load_translate_config() if enable_translate else None,
-                self._resolve_tiger_mode(),
-                self._mss_model_combo.currentName(),
-                self._ss_model_combo.currentName(),
-                self._chk_tiger_save.isChecked(),
-                self._chk_vad.isChecked(),
-            ),
-            daemon=True,
-        )
-        thread.start()
-
-    # ── 流水线执行 (后台线程) ──
-
-    def _run_pipeline(self, media_files, lang, device, model_size, align_model,
-                      retention, pp, cond_prev, translate_cfg, tiger_mode,
-                      mss_model, ss_model, tiger_save, vad_filter):
-        from writansub.pipeline.runner import PipelineConfig, run_pipeline
-
-        log_emit = self._signals.log_requested.emit
-        prog_emit = self._signals.progress_requested.emit
+        translate_cfg = load_translate_config() if self._chk_translate.isChecked() else None
+        pp = {k: v.value() for k, v in self._pp_vars.items()}
 
         cfg = PipelineConfig(
-            media_files=media_files,
-            lang=lang,
-            device=device,
-            whisper_model=model_size,
-            align_model=align_model,
-            condition_on_prev=cond_prev,
-            vad_filter=vad_filter,
-            tiger_mode=tiger_mode,
-            mss_model=mss_model,
-            ss_model=ss_model,
-            save_intermediate=tiger_save,
-            keep_whisper_srt=retention.get("whisper", False),
-            keep_aligned_srt=retention.get("force_align", False),
-            generate_review=retention.get("review", False),
+            media_files=list(self._media_files),
+            lang=self._lang_combo.currentText(),
+            device=self._whisper_device_combo.currentText(),
+            whisper_model=self._model_combo.currentName(),
+            align_model=self._align_model_combo.currentName(),
+            condition_on_prev=self._chk_cond_prev.isChecked(),
+            vad_filter=self._chk_vad.isChecked(),
+            initial_prompt=self._prompt_edit.text().strip() or None,
+            tiger_mode=self._resolve_tiger_mode(),
+            mss_model=self._mss_model_combo.currentName(),
+            ss_model=self._ss_model_combo.currentName(),
+            save_intermediate=self._chk_tiger_save.isChecked(),
+            ref_srt=self._ref_srt_path or None,
+            use_ref_sub=self._chk_ref_sub.isChecked(),
+            ref_direct=self._chk_ref_direct.isChecked(),
+            keep_whisper_srt=self._chk_whisper.isChecked(),
+            keep_aligned_srt=self._chk_force_align.isChecked(),
+            generate_review=self._chk_review.isChecked(),
             translate=bool(translate_cfg),
             extend_end=pp.get("extend_end", 0.30),
             extend_start=pp.get("extend_start", 0.00),
@@ -444,13 +476,25 @@ class PipelineTab(StateMixin, QWidget):
             min_duration=pp.get("min_duration", 0.30),
             pad_sec=pp.get("pad_sec", 0.50),
         )
-
         if translate_cfg:
             cfg.api_base = translate_cfg.get("api_base", cfg.api_base)
             cfg.api_key = translate_cfg.get("api_key", cfg.api_key)
             cfg.llm_model = translate_cfg.get("model", cfg.llm_model)
             cfg.target_lang = translate_cfg.get("target_lang", cfg.target_lang)
             cfg.batch_size = translate_cfg.get("batch_size", cfg.batch_size)
+
+        thread = threading.Thread(
+            target=self._run_pipeline, args=(cfg,), daemon=True,
+        )
+        thread.start()
+
+    # ── 流水线执行 (后台线程) ──
+
+    def _run_pipeline(self, cfg):
+        from writansub.pipeline.runner import run_pipeline
+
+        log_emit = self._signals.log_requested.emit
+        prog_emit = self._signals.progress_requested.emit
 
         try:
             run_pipeline(cfg, log=log_emit, progress=prog_emit)

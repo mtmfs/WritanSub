@@ -1,5 +1,3 @@
-"""Review 模块：从转录/对齐数据生成 review 标记文件"""
-
 import os
 import re
 
@@ -89,7 +87,6 @@ def write_review_files(base_path: str, srt_content: str, ass_content: str) -> No
 
 
 def mark_low_align_in_review(base: str, low_indices: set[int]) -> None:
-    """在已有的 _review.srt / _review.ass 中给低分句子加【】标记。"""
     review_srt = f"{base}_review.srt"
     review_ass = f"{base}_review.ass"
 

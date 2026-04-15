@@ -1,5 +1,3 @@
-"""强制对齐：罗马音转换、音频加载、MMS_FA / Qwen3 对齐、后处理"""
-
 import re
 from dataclasses import replace
 from typing import Any, Callable
@@ -31,7 +29,6 @@ def _get_katsu() -> Any:
 
 
 def japanese_to_romaji(text: str) -> str:
-    """日语文本 → 小写罗马音，只保留 a-z。"""
     cleaned = _PUNCT_CJK_RE.sub('', text)
     if not cleaned:
         return ""
@@ -40,7 +37,6 @@ def japanese_to_romaji(text: str) -> str:
 
 
 def text_to_romaji(text: str, lang: str) -> str:
-    """多语言文本 → 小写罗马音 (a-z)，按语言分派转换方法。"""
     if lang == "ja":
         return japanese_to_romaji(text)
 
@@ -81,7 +77,6 @@ def load_audio(path: str):
 
 
 def init_model(device: str) -> tuple:
-    """初始化 MMS_FA 模型、tokenizer、aligner。"""
     from torchaudio.pipelines import MMS_FA as bundle
     model = bundle.get_model().to(device)
     tokenizer = bundle.get_tokenizer()
@@ -144,7 +139,6 @@ LANG_MAP: dict[str, str] = {
 
 
 def init_qwen3_model(device: str) -> Any:
-    """加载 Qwen3-ForcedAligner-0.6B 模型。"""
     import os
     import torch
     from qwen_asr import Qwen3ForcedAligner
@@ -243,7 +237,7 @@ def run_alignment(
     total_subs = len(subs)
 
     for i, sub in enumerate(subs):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
 
         if progress_callback:
             progress_callback(i / total_subs, f"对齐中... {i+1}/{total_subs}")

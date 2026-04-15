@@ -1,5 +1,3 @@
-"""单独强制打轴页"""
-
 import threading
 
 from PySide6.QtWidgets import (
@@ -23,12 +21,10 @@ from writansub.gui.widgets import (
 
 
 class _AlignSignals(QObject):
-    """线程安全的信号"""
     finished = Signal()
 
 
 class AlignmentTab(StateMixin, QWidget):
-    """Tab 3: 独立 MMS_FA 强制打轴"""
 
     _PP_KEYS = [
         "extend_end", "extend_start", "gap_threshold",
@@ -61,7 +57,6 @@ class AlignmentTab(StateMixin, QWidget):
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(12, 12, 12, 12)
 
-        # 文件
         card_file = QGroupBox("文件")
         settings_layout.addWidget(card_file)
         file_layout = QGridLayout(card_file)
@@ -90,7 +85,6 @@ class AlignmentTab(StateMixin, QWidget):
 
         file_layout.setColumnStretch(1, 1)
 
-        # 参数
         card_param = QGroupBox("参数")
         settings_layout.addWidget(card_param)
         param_main = QVBoxLayout(card_param)
@@ -157,7 +151,6 @@ class AlignmentTab(StateMixin, QWidget):
 
         splitter.addWidget(bottom_widget)
 
-        # 默认比例：上 3 下 1
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 

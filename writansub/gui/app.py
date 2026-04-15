@@ -1,5 +1,3 @@
-"""主窗口：组装五个 Tab，程序入口 main()"""
-
 import os
 import sys
 
@@ -24,7 +22,6 @@ _TAB_DEFS = [
 
 
 class MainWindow(QMainWindow):
-    """主窗口：五个选项卡"""
 
     def __init__(self, initial_media: str = ""):
         super().__init__()
@@ -47,7 +44,6 @@ class MainWindow(QMainWindow):
             self.pipeline_tab.set_media_path(initial_media)
 
     def closeEvent(self, event) -> None:
-        """关闭时：停止所有资源 → 保存 GUI 状态 + PP 参数"""
         from writansub.bridge import ResourceRegistry
 
         ResourceRegistry.instance().shutdown()
@@ -57,7 +53,6 @@ class MainWindow(QMainWindow):
             state.update(tab.save_state())
         save_gui_state(state)
 
-        # 收集所有 ParamSpinBox 当前值，保存 PP 配置
         from writansub.gui.widgets import ParamSpinBox
         pp = {}
         for spin in self.findChildren(ParamSpinBox):

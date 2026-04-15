@@ -1,7 +1,7 @@
-"""由 Rust 驱动的高性能原生资源管理器"""
 import functools
 import gc
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -27,6 +27,18 @@ def _get_ffmpeg() -> str:
     from imageio_ffmpeg import get_ffmpeg_exe
     return get_ffmpeg_exe()
 
+
+@functools.lru_cache(maxsize=1)
+def _get_ffprobe() -> str:
+    """查找 ffprobe 可执行路径（系统优先，否则从 ffmpeg 同目录推导），结果缓存。"""
+    path = shutil.which("ffprobe")
+    if path:
+        return path
+    ffmpeg = _get_ffmpeg()
+    dirpath = os.path.dirname(ffmpeg)
+    probe_name = os.path.basename(ffmpeg).replace("ffmpeg", "ffprobe")
+    return os.path.join(dirpath, probe_name) if dirpath else probe_name
+
 class ResourceRegistry:
     """Resource Registry (Rust Native Wrapper)
 
@@ -50,16 +62,14 @@ class ResourceRegistry:
         self._model_handles: dict[tuple[str, str], int] = {}
         self.cancelled = False
         self._pause_event = threading.Event()
-        self._pause_event.set()  # 初始为非暂停状态
+        self._pause_event.set()
 
     # ── 暂停 / 取消 ─────────────────────────────────────
 
     def pause(self) -> None:
-        """请求暂停：后台线程在下一个 checkpoint 处阻塞。"""
         self._pause_event.clear()
 
     def resume(self) -> None:
-        """恢复执行。"""
         self._pause_event.set()
 
     @property
@@ -67,7 +77,6 @@ class ResourceRegistry:
         return not self._pause_event.is_set()
 
     def reset_controls(self) -> None:
-        """任务开始前重置取消/暂停状态。"""
         self.cancelled = False
         self._pause_event.set()
 
@@ -88,7 +97,6 @@ class ResourceRegistry:
         return handle
 
     def acquire_model(self, name: str, device: str, factory: Callable[[], Any]) -> int:
-        """高性能模型获取：优先从原生池复用"""
         key = (name, device)
         if key in self._model_handles:
             handle = self._model_handles[key]
@@ -171,8 +179,7 @@ class ResourceRegistry:
         return waveform, sample_rate
 
     def shutdown(self) -> None:
-        """物理级清理：取消所有任务 + 终止 Rust 接管的子进程"""
         log.info("Native Shutdown Initiated...")
         self.cancelled = True
-        self._pause_event.set()  # 解除暂停，让线程能退出
+        self._pause_event.set()
         self._native.shutdown()

@@ -1,5 +1,3 @@
-"""单独语音识别页"""
-
 import os
 import threading
 
@@ -20,12 +18,10 @@ from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, G
 
 
 class _WhisperSignals(QObject):
-    """线程安全的信号"""
     finished = Signal()
 
 
 class WhisperTab(StateMixin, QWidget):
-    """Tab 2: 独立 Whisper 语音识别"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,7 +49,6 @@ class WhisperTab(StateMixin, QWidget):
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(12, 12, 12, 12)
 
-        # 文件
         card_file = QGroupBox("文件")
         settings_layout.addWidget(card_file)
         file_layout = QGridLayout(card_file)
@@ -75,7 +70,6 @@ class WhisperTab(StateMixin, QWidget):
 
         file_layout.setColumnStretch(1, 1)
 
-        # 参数
         card_param = QGroupBox("参数")
         settings_layout.addWidget(card_param)
         param_layout = QHBoxLayout(card_param)
@@ -127,6 +121,19 @@ class WhisperTab(StateMixin, QWidget):
         param_layout.addWidget(self._chk_vad)
         param_layout.addStretch()
 
+        card_prompt = QGroupBox("初始提示")
+        settings_layout.addWidget(card_prompt)
+        prompt_layout = QVBoxLayout(card_prompt)
+        self._prompt_edit = QLineEdit()
+        self._prompt_edit.setPlaceholderText("人名、专有名词，空格或顿号分隔（≤224 token）")
+        self._prompt_edit.setToolTip(
+            "Whisper initial_prompt：作为上下文偏好传给模型，\n"
+            "用于让角色名、作品名、术语保持一致的写法。\n"
+            "例如：瀬尾拓也、伊地知琴子、天音ケイ、キラモン\n"
+            "注意：faster-whisper 上限约 224 token，过长会被截断。"
+        )
+        prompt_layout.addWidget(self._prompt_edit)
+
         settings_layout.addStretch()
 
         splitter.addWidget(top_widget)
@@ -165,7 +172,6 @@ class WhisperTab(StateMixin, QWidget):
 
         splitter.addWidget(bottom_widget)
 
-        # 默认比例：上 3 下 1
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
@@ -177,6 +183,7 @@ class WhisperTab(StateMixin, QWidget):
         self._device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_cond_prev.stateChanged.connect(self._auto_save)
         self._chk_vad.stateChanged.connect(self._auto_save)
+        self._prompt_edit.editingFinished.connect(self._auto_save)
 
     def save_state(self) -> dict:
         return {
@@ -187,6 +194,7 @@ class WhisperTab(StateMixin, QWidget):
             "whisper.device": self._device_combo.currentText(),
             "whisper.cond_prev": self._chk_cond_prev.isChecked(),
             "whisper.vad_filter": self._chk_vad.isChecked(),
+            "whisper.initial_prompt": self._prompt_edit.text(),
         }
 
     def restore_state(self, state: dict):
@@ -204,6 +212,8 @@ class WhisperTab(StateMixin, QWidget):
             self._chk_cond_prev.setChecked(state["whisper.cond_prev"])
         if "whisper.vad_filter" in state:
             self._chk_vad.setChecked(state["whisper.vad_filter"])
+        if "whisper.initial_prompt" in state:
+            self._prompt_edit.setText(state["whisper.initial_prompt"])
 
     def _browse_media(self):
         filter_str = ";;".join(f"{label} ({exts})" for label, exts in MEDIA_FILETYPES)
@@ -247,7 +257,7 @@ class WhisperTab(StateMixin, QWidget):
         reg = ResourceRegistry.instance()
         reg.cancelled = True
         reg.resume()
-        self._log.log("正在取消...")
+        self._log.log("取消请求已发送，将在当前段结束后停止")
 
     def _start(self):
         media = self._media_edit.text().strip()
@@ -272,23 +282,36 @@ class WhisperTab(StateMixin, QWidget):
         wc = self._wc_spin.value()
         cond_prev = self._chk_cond_prev.isChecked()
         vad_filter = self._chk_vad.isChecked()
+        initial_prompt = self._prompt_edit.text().strip() or None
 
         thread = threading.Thread(
             target=self._run_whisper,
-            args=(media, output, lang, model_size, device, wc, cond_prev, vad_filter),
+            args=(media, output, lang, model_size, device, wc, cond_prev, vad_filter, initial_prompt),
             daemon=True,
         )
         thread.start()
 
     def _run_whisper(self, media: str, output: str, lang: str,
                      model_size: str, device: str, wc_threshold: float,
-                     cond_prev: bool = True, vad_filter: bool = False):
+                     cond_prev: bool = True, vad_filter: bool = False,
+                     initial_prompt: str | None = None):
+        reg = ResourceRegistry.instance()
+
+        def _w_factory():
+            from faster_whisper import WhisperModel
+            return WhisperModel(model_size, device=device, compute_type="int8")
+
+        wh = None
         try:
+            wh = reg.acquire_model(f"whisper:{model_size}", device, _w_factory)
+            whisper_model = reg.get_model(wh)
+
             subs, word_data = transcribe(
                 media, lang=lang, device=device, log_callback=self._log.log,
                 progress_callback=self._progress.update_progress,
-                condition_on_previous_text=cond_prev, model_size=model_size,
+                condition_on_previous_text=cond_prev, model=whisper_model,
                 vad_filter=vad_filter,
+                initial_prompt=initial_prompt,
             )
 
             if wc_threshold > 0.0:
@@ -307,4 +330,6 @@ class WhisperTab(StateMixin, QWidget):
         except Exception as e:
             self._log.log(f"出错: {e}")
         finally:
+            if wh is not None:
+                reg.release_model(wh)
             self._signals.finished.emit()

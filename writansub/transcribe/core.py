@@ -1,5 +1,3 @@
-"""语音识别：调用 faster-whisper 将媒体转录为 list[Sub]"""
-
 from typing import Any, Callable
 
 from writansub.types import Sub, WordInfo
@@ -16,6 +14,7 @@ def transcribe(
     model_size: str = "large-v3",
     cancelled: Callable[[], bool] | None = None,
     vad_filter: bool = False,
+    initial_prompt: str | None = None,
 ) -> tuple[list[Sub], list[list[WordInfo]]]:
     """
     使用 faster_whisper 将媒体文件转录为字幕列表。
@@ -32,6 +31,7 @@ def transcribe(
         model: 预加载的 WhisperModel，为 None 时内部创建
         cancelled: 取消检查回调，返回 True 时中断识别
         vad_filter: 启用 Silero VAD 跳过静音段，加速识别
+        initial_prompt: Whisper 上下文提示（人名/术语词典），≤224 token
 
     Returns:
         (subs, word_data):
@@ -47,11 +47,12 @@ def transcribe(
         if progress_callback:
             progress_callback(min(pct, 1.0), msg)
 
-    own_model = model is None
-    _progress(0.0, "加载模型..." if own_model else "开始识别...")
-    if own_model:
+    if model is None:
+        _progress(0.0, "加载模型...")
         from faster_whisper import WhisperModel
         model = WhisperModel(model_size, device=device, compute_type="int8")
+    else:
+        _progress(0.0, "开始识别...")
 
     _progress(0.02, "识别中...")
     segments, info = model.transcribe(
@@ -60,13 +61,14 @@ def transcribe(
         word_timestamps=True,
         condition_on_previous_text=condition_on_previous_text,
         vad_filter=vad_filter,
+        initial_prompt=initial_prompt or None,
     )
 
     subs: list[Sub] = []
     word_data: list[list[WordInfo]] = []
 
     for i, seg in enumerate(segments, 1):
-        reg.checkpoint()  # 暂停 / 取消
+        reg.checkpoint()
 
         subs.append(Sub(
             index=i,
@@ -86,10 +88,6 @@ def transcribe(
             f"识别中... {i} 条",
         )
 
-    if own_model:
-        del model
-
     _progress(1.0, "识别完成")
     return subs, word_data
-
 

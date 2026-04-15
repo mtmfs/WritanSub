@@ -1,5 +1,3 @@
-"""单独 AI 翻译页"""
-
 import os
 import threading
 from dataclasses import replace
@@ -18,12 +16,10 @@ from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, StateMixin
 
 class _TranslateSignals(QObject):
-    """线程安全的信号"""
     finished = Signal()
 
 
 class TranslateTab(StateMixin, QWidget):
-    """Tab 4: 独立 AI 翻译"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -51,7 +47,6 @@ class TranslateTab(StateMixin, QWidget):
         settings_layout = QVBoxLayout(settings)
         settings_layout.setContentsMargins(12, 12, 12, 12)
 
-        # 文件
         card_file = QGroupBox("文件")
         settings_layout.addWidget(card_file)
         file_layout = QGridLayout(card_file)
@@ -73,7 +68,6 @@ class TranslateTab(StateMixin, QWidget):
 
         file_layout.setColumnStretch(1, 1)
 
-        # 翻译设置
         card_cfg = QGroupBox("翻译设置")
         settings_layout.addWidget(card_cfg)
         cfg_layout = QGridLayout(card_cfg)
@@ -147,7 +141,6 @@ class TranslateTab(StateMixin, QWidget):
 
         splitter.addWidget(bottom_widget)
 
-        # 默认比例：上 3 下 1
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
@@ -161,7 +154,6 @@ class TranslateTab(StateMixin, QWidget):
         self._chk_bilingual.stateChanged.connect(self._auto_save)
 
     def _get_translate_config(self) -> dict:
-        """当前翻译配置（用于保存和执行）"""
         return {
             "target_lang": self._target_combo.currentText(),
             "api_base": self._base_edit.text(),

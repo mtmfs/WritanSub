@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
-from writansub.subtitle.srt_io import write_srt, populate_romaji, merge_bilingual
+from writansub.subtitle.srt_io import parse_srt, write_srt, populate_romaji, merge_bilingual
 from writansub.subtitle.review import generate_review, write_review_files, mark_low_align_in_review
 from writansub.transcribe.core import transcribe
 from writansub.translate.core import translate_subs
@@ -19,7 +19,6 @@ from writansub.align.core import load_audio, run_alignment, post_process, init_m
 
 @dataclass
 class PipelineConfig:
-    """流水线全部参数（CLI / GUI 共用）"""
     media_files: list[str] = field(default_factory=list)
     lang: str = "ja"
     device: str = "cuda"
@@ -27,23 +26,24 @@ class PipelineConfig:
     align_model: str = "mms_fa"
     condition_on_prev: bool = True
     vad_filter: bool = False
-    # 预处理
+    initial_prompt: str | None = None
     tiger_mode: str | None = None       # None | "denoise" | "separate"
     mss_model: str = "tiger-dnr"
     ss_model: str = "tiger-speech"
     save_intermediate: bool = False
-    # 输出
     keep_whisper_srt: bool = False
     keep_aligned_srt: bool = False
     generate_review: bool = False
-    # 翻译
     translate: bool = False
     api_base: str = TRANSLATE_DEFAULTS["api_base"]
     api_key: str = TRANSLATE_DEFAULTS["api_key"]
     llm_model: str = TRANSLATE_DEFAULTS["model"]
     target_lang: str = TRANSLATE_DEFAULTS["target_lang"]
     batch_size: int = TRANSLATE_DEFAULTS["batch_size"]
-    # 后处理
+    ref_srt: str | None = None
+    use_ref_sub: bool = False
+    ref_sub_track: int | None = None        # 内嵌字幕轨索引（None = 按语言自动匹配）
+    ref_direct: bool = False                # True 时跳过对齐，直接用参考时间轴
     extend_end: float = PP_DEFAULTS["extend_end"]
     extend_start: float = PP_DEFAULTS["extend_start"]
     gap_threshold: float = PP_DEFAULTS["gap_threshold"]
@@ -72,7 +72,9 @@ def run_pipeline(
     pp_keys = {"extend_end", "extend_start", "gap_threshold", "min_gap", "min_duration"}
     pp = {k: getattr(cfg, k) for k in pp_keys}
 
-    num_phases = 2 + (1 if cfg.translate else 0) + (1 if cfg.tiger_mode else 0)
+    has_ref = bool(cfg.ref_srt) or cfg.use_ref_sub
+    skip_align = cfg.ref_direct and has_ref
+    num_phases = (1 if skip_align else 2) + (1 if cfg.translate else 0) + (1 if cfg.tiger_mode else 0)
     phase_offset = 1 if cfg.tiger_mode else 0
     total = len(cfg.media_files)
 
@@ -124,10 +126,45 @@ def run_pipeline(
     finally:
         reg.release_model(wh)
 
-    # Phase: 对齐
+    # Phase: 参考字幕映射（可选）
+    if sub_results and not _cancelled() and has_ref:
+        from writansub.subtitle.ref_align import map_whisper_to_ref
+        from writansub.subtitle.extract import probe_subtitle_tracks, select_track, extract_subtitle
+
+        external_ref: list | None = None
+        if cfg.ref_srt:
+            external_ref = parse_srt(cfg.ref_srt, lang=cfg.lang)
+            log(f"使用外部参考字幕: {cfg.ref_srt} ({len(external_ref)} 条)")
+
+        for media in cfg.media_files:
+            if media not in sub_results:
+                continue
+            try:
+                if external_ref is not None:
+                    ref_subs = external_ref
+                else:
+                    tracks = probe_subtitle_tracks(media)
+                    if not tracks:
+                        log(f"未找到内嵌字幕轨: {os.path.basename(media)}")
+                        continue
+                    track_idx = cfg.ref_sub_track if cfg.ref_sub_track is not None else select_track(tracks, cfg.lang)
+                    if track_idx is None:
+                        log(f"未匹配到字幕轨: {os.path.basename(media)}")
+                        continue
+                    ref_subs = extract_subtitle(media, track_idx)
+                    log(f"提取内嵌字幕轨 #{track_idx}: {len(ref_subs)} 条")
+
+                mapped = map_whisper_to_ref(sub_results[media], ref_subs)
+                log(f"参考字幕映射完成: {len(mapped)} 条 (原 Whisper {len(sub_results[media])} 条)")
+                sub_results[media] = mapped
+            except CancelledError:
+                raise
+            except Exception as e:
+                log(f"参考字幕处理失败，跳过: {e}")
+
     a_phase = 2 + phase_offset
     aligned_results: dict[str, Any] = {}
-    if sub_results and not _cancelled():
+    if sub_results and not _cancelled() and not skip_align:
         use_qwen3 = (cfg.align_model == "qwen3-fa-0.6b")
         label = "Qwen3 对齐" if use_qwen3 else "MMS 对齐"
         log(f">>> Phase {a_phase}/{num_phases}: {label}")
@@ -195,7 +232,12 @@ def run_pipeline(
         finally:
             reg.release_model(mh)
 
-    # Phase: AI 翻译
+    # ref_direct: 跳过对齐，直接后处理
+    if skip_align and sub_results and not _cancelled():
+        log("参考字幕直接模式: 跳过强制对齐")
+        for media, subs in sub_results.items():
+            aligned_results[media] = post_process(subs, **pp)
+
     if cfg.translate and aligned_results and not _cancelled():
         log(f">>> Phase {num_phases}/{num_phases}: AI 翻译")
         for idx, media in enumerate(cfg.media_files, 1):
@@ -241,7 +283,6 @@ def _run_tiger_phase(
     progress: Callable[[float, str], None],
     cancelled: Callable[[], bool],
 ) -> dict:
-    """执行 TIGER 增强阶段"""
     log(f">>> Phase 1/{num_phases}: TIGER 增强")
     from writansub.preprocess.core import run_dnr_batch, run_speech_batch
 
@@ -278,7 +319,6 @@ def _transcribe_single(
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
 ) -> tuple[list, list]:
-    """对单个媒体文件执行 Whisper 转录"""
     from writansub.preprocess.core import save_wav
 
     whisper_input = media
@@ -311,6 +351,7 @@ def _transcribe_single(
             model=whisper_model,
             cancelled=lambda: ResourceRegistry.instance().cancelled,
             vad_filter=cfg.vad_filter,
+            initial_prompt=cfg.initial_prompt,
         )
     finally:
         if tmp_dialog:
@@ -330,7 +371,6 @@ def _whisper_with_overlap(
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
 ) -> tuple[list, list]:
-    """重叠区域分轨转录并合并结果"""
     from writansub.preprocess.core import save_wav
 
     reg = ResourceRegistry.instance()
@@ -343,6 +383,7 @@ def _whisper_with_overlap(
         condition_on_previous_text=cfg.condition_on_prev,
         model=whisper_model,
         cancelled=_cancelled,
+        initial_prompt=cfg.initial_prompt,
     )
     if not overlap_regions:
         return full_subs, full_word_data
@@ -368,6 +409,7 @@ def _whisper_with_overlap(
                 local_subs, _ = transcribe(
                     tmp_path, lang=cfg.lang, device=cfg.device,
                     condition_on_previous_text=False, model=whisper_model,
+                    initial_prompt=cfg.initial_prompt,
                 )
                 for s in local_subs:
                     s.start += region.start
@@ -379,7 +421,6 @@ def _whisper_with_overlap(
                 except OSError:
                     pass
 
-    # 过滤掉落在重叠区域内的原始字幕
     commented = set()
     for i, sub in enumerate(full_subs):
         mid = (sub.start + sub.end) / 2
