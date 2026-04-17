@@ -77,6 +77,9 @@ def _enable_windows_dpi_awareness() -> None:
 def main() -> None:
     _enable_windows_dpi_awareness()
 
+    from writansub.network import setup_hf_mirror
+    setup_hf_mirror()
+
     from writansub.gui.driver_check import check_driver
     check_driver()
 

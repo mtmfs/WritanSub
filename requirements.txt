@@ -12,3 +12,8 @@ unidecode==1.4.0
 korean-romanizer==0.28.0
 PySide6==6.10.2
 imageio-ffmpeg==0.6.0
+qwen-asr
+demucs
+espnet
+espnet-model-zoo
+platformdirs>=3.0.0

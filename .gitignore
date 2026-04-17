@@ -8,6 +8,21 @@ build/
 *.spec
 .claude/
 
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# 测试与覆盖率
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
 # GUI 运行时缓存 & 用户配置
 writansub_pp.json
 writansub_translate.json

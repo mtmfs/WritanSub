@@ -5,7 +5,26 @@ build-backend = "hatchling.build"
 [project]
 name = "writansub"
 version = "0.1.7.3"
+description = "AI字幕处理流水线：音频预处理 → 语音识别 → 强制打轴 → AI 翻译"
+readme = "README.md"
+license = {text = "GPL-3.0"}
+authors = [
+    {name = "mtmfs", email = "mtmfs@example.com"},
+]
+keywords = ["subtitle", "whisper", "translation", "audio", "speech-recognition", "alignment"]
 requires-python = ">=3.12"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Text Processing :: Linguistic",
+]
 dependencies = [
     "torch==2.10.0",
     "torchaudio==2.10.0",
@@ -25,14 +44,20 @@ dependencies = [
     "espnet",
     "espnet-model-zoo",
     "writansub_native",
+    "platformdirs>=3.0.0",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["writansub"]
+[project.urls]
+Homepage = "https://github.com/mtmfs/WritanSub"
+Repository = "https://github.com/mtmfs/WritanSub"
+Issues = "https://github.com/mtmfs/WritanSub/issues"
 
 [project.scripts]
 writansub = "writansub.gui.app:main"
 writansub-cli = "writansub.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["writansub"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
@@ -40,6 +65,32 @@ torchaudio = { index = "pytorch-cu128" }
 writansub_native = { path = "./native" }
 
 [[tool.uv.index]]
+name = "tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true

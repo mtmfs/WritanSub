@@ -58,7 +58,9 @@ def run_pipeline(
     import torch
 
     reg = ResourceRegistry.instance()
-    _cancelled = lambda: reg.cancelled
+
+    def _cancelled() -> bool:
+        return reg.cancelled
 
     pp_keys = {"extend_end", "extend_start", "gap_threshold", "min_gap", "min_duration"}
     pp = {k: getattr(cfg, k) for k in pp_keys}
@@ -164,9 +166,13 @@ def run_pipeline(
             from writansub.align.core import init_qwen3_model, run_qwen3_alignment
             mh = reg.acquire_model("qwen3_fa", cfg.device, lambda: init_qwen3_model(cfg.device))
             qwen3_model = reg.get_model(mh)
+            mms_bundle = None
         else:
+            import torchaudio.transforms as T
+            from torchaudio.pipelines import MMS_FA as _mms_bundle
             mh = reg.acquire_model("mms_fa", cfg.device, lambda: init_model(cfg.device))
             mms_bundle = reg.get_model(mh)
+            qwen3_model = None
 
         try:
             for idx, media in enumerate(cfg.media_files, 1):
@@ -181,8 +187,6 @@ def run_pipeline(
 
                 tiger_data = tiger_results.get(media)
                 if tiger_data and "dialog_wav" in tiger_data:
-                    import torchaudio.transforms as T
-                    from torchaudio.pipelines import MMS_FA as _mms_bundle
                     target_sr = 16000 if use_qwen3 else _mms_bundle.sample_rate
                     src_sr = tiger_data["dialog_sr"]
                     waveform = tiger_data["dialog_wav"]
@@ -363,7 +367,9 @@ def _whisper_with_overlap(
     from writansub.preprocess.core import save_wav
 
     reg = ResourceRegistry.instance()
-    _cancelled = lambda: reg.cancelled
+
+    def _cancelled() -> bool:
+        return reg.cancelled
 
     full_subs, full_word_data = transcribe(
         media, lang=cfg.lang, device=cfg.device,

@@ -3,7 +3,6 @@ import json
 import os
 import signal
 import sys
-from dataclasses import replace
 
 from writansub import __version__
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
@@ -104,8 +103,7 @@ def _load_config_file(path: str | None) -> dict:
 def _resolve_pp(args: argparse.Namespace, file_cfg: dict) -> dict[str, float]:
     result = {}
     for key, default in PP_DEFAULTS.items():
-        cli_key = key.replace("_", "-")
-        cli_val = getattr(args, key.replace("-", "_"), None) if hasattr(args, key) else None
+        cli_val = getattr(args, key, None) if hasattr(args, key) else None
         file_val = file_cfg.get(key)
         if cli_val is not None:
             result[key] = cli_val
@@ -520,6 +518,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     _ensure_utf8()
+    from writansub.network import setup_hf_mirror
+    setup_hf_mirror()
     parser = build_parser()
     args = parser.parse_args()
     try:

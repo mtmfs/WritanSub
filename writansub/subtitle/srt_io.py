@@ -3,7 +3,7 @@ import dataclasses
 from writansub.types import Sub, fmt_srt_time
 
 
-def _subs_from_pysrt(items, lang: str | None) -> list[Sub]:
+def _subs_from_pysrt(items: Any, lang: str | None) -> list[Sub]:
     if lang:
         from writansub.align.core import text_to_romaji
     result = []
