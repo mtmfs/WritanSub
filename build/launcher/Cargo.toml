@@ -1,0 +1,22 @@
+[package]
+name = "writansub-launcher"
+version = "0.1.7"
+edition = "2021"
+
+[[bin]]
+name = "WritanSub"
+path = "src/main.rs"
+
+[[bin]]
+name = "WritanSubCLI"
+path = "src/cli.rs"
+
+[dependencies]
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

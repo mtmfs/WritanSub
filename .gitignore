@@ -3,7 +3,13 @@ __pycache__/
 *.pyc
 *.pyo
 dist/
-build/
+build/cache/
+build/dist/
+build/release/
+build/wheels/
+build/launcher/target/
+build/requirements.lock.txt
+build/*.tar
 *.egg-info/
 *.spec
 .claude/
