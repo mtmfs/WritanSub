@@ -1,6 +1,16 @@
 @echo off
 cd /d "%~dp0"
 chcp 65001 >nul 2>&1
-set HF_HUB_OFFLINE=1
-set HF_HUB_CACHE=G:\本地部署模型\faster-whisper
-.venv\Scripts\python.exe -m writansub %*
+
+where uv >nul 2>&1
+if %errorlevel%==0 (
+    uv run python -m writansub %*
+    exit /b
+)
+
+if exist ".venv\Scripts\python.exe" (
+    .venv\Scripts\python.exe -m writansub %*
+    exit /b
+)
+
+python -m writansub %*

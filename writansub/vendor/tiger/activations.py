@@ -64,5 +64,4 @@ def get(identifier):
 
 
 if __name__ == "__main__":
-    print(globals().keys())
-    print(globals().get("tanh"))
+    pass

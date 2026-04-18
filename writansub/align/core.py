@@ -68,7 +68,7 @@ def text_to_romaji(text: str, lang: str) -> str:
     return _ROMAJI_FILTER_RE.sub('', romaji.lower())
 
 
-def load_audio(path: str):
+def load_audio(path: str) -> torch.Tensor:
     from torchaudio.pipelines import MMS_FA as bundle
     from writansub.bridge import ResourceRegistry
     waveform, _ = ResourceRegistry.instance().decode_audio(path, sample_rate=bundle.sample_rate)
@@ -84,11 +84,11 @@ def init_model(device: str) -> tuple:
 
 
 def align_segment(
-    waveform_chunk,
+    waveform_chunk: torch.Tensor,
     romaji: str,
-    model,
-    tokenizer,
-    aligner,
+    model: Any,
+    tokenizer: Any,
+    aligner: Any,
     device: str,
 ) -> tuple[float, float, float] | None:
     """返回 (start_sec, end_sec, avg_score) 或 None。"""
@@ -150,14 +150,26 @@ def init_qwen3_model(device: str) -> Any:
 
 
 
-def _align_one_mms(chunk, sub, model_bundle, device, sr):
+def _align_one_mms(
+    chunk: torch.Tensor,
+    sub: Sub,
+    model_bundle: tuple[Any, Any, Any],
+    device: str,
+    sr: int,
+) -> tuple[float, float, float] | None:
     if not sub.romaji:
         return None
     model, tokenizer, aligner = model_bundle
     return align_segment(chunk, sub.romaji, model, tokenizer, aligner, device)
 
 
-def _align_one_qwen3(chunk, sub, qwen3_model, sr, qwen_lang):
+def _align_one_qwen3(
+    chunk: torch.Tensor,
+    sub: Sub,
+    qwen3_model: Any,
+    sr: int,
+    qwen_lang: str,
+) -> tuple[float, float, float] | None:
     import numpy as np
 
     text = sub.text.strip()
@@ -183,12 +195,12 @@ def _align_one_qwen3(chunk, sub, qwen3_model, sr, qwen_lang):
 
 
 def run_alignment(
-    waveform,
+    waveform: torch.Tensor,
     subs: list[Sub],
     device: str = "cuda",
     pad_sec: float = 0.5,
     progress_callback: Callable[[float, str], None] | None = None,
-    model_bundle: tuple | None = None,
+    model_bundle: tuple[Any, Any, Any] | None = None,
     log_callback: Callable[[str], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
     *,
@@ -261,7 +273,7 @@ def run_alignment(
 
 
 def run_qwen3_alignment(
-    waveform,
+    waveform: torch.Tensor,
     subs: list[Sub],
     device: str = "cuda",
     pad_sec: float = 0.5,
