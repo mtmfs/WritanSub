@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 import gc
 import logging
@@ -5,11 +7,12 @@ import os
 import shutil
 import subprocess
 import threading
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-import numpy as np
-import torch
 import writansub_native
+
+if TYPE_CHECKING:
+    import torch
 
 log = logging.getLogger(__name__)
 
@@ -140,7 +143,10 @@ class ResourceRegistry:
 
         return subprocess.CompletedProcess(cmd, code, stdout, stderr)
 
-    def decode_audio(self, path: str, sample_rate: int = 44100) -> tuple[torch.Tensor, int]:
+    def decode_audio(self, path: str, sample_rate: int = 44100) -> tuple["torch.Tensor", int]:
+        import numpy as np
+        import torch
+
         cmd = [
             _get_ffmpeg(), "-i", path,
             "-f", "s16le", "-ac", "1", "-ar", str(sample_rate),

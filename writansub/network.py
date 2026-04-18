@@ -14,5 +14,7 @@ def setup_hf_mirror() -> None:
     """若用户未设置 HF_ENDPOINT，且 huggingface.co 不可达，则自动切换到镜像站。"""
     if os.environ.get("HF_ENDPOINT"):
         return
+    if os.environ.get("HF_HUB_OFFLINE"):
+        return
     if not _can_reach("huggingface.co"):
         os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
