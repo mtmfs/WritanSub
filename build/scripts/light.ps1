@@ -184,7 +184,7 @@ if exist "runtime\python.exe" (
 echo.
 echo [2/5] 配置 runtime ...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$f = Get-ChildItem 'runtime' -Filter 'python*._pth' | Select-Object -First 1; if (-not $f) { Write-Error 'no _pth'; exit 1 }; Set-Content $f.FullName -Value \"python312.zip`n.`nLib\site-packages`nimport site\" -Encoding ASCII; New-Item -ItemType Directory -Force -Path 'runtime\Lib\site-packages' | Out-Null"
+    "$f = Get-ChildItem 'runtime' -Filter 'python*._pth' | Select-Object -First 1; if (-not $f) { Write-Error 'no _pth'; exit 1 }; Set-Content $f.FullName -Value \"python312.zip`n.`nLib\site-packages`n..\app`nimport site\" -Encoding ASCII; New-Item -ItemType Directory -Force -Path 'runtime\Lib\site-packages' | Out-Null"
 if errorlevel 1 (
     echo _pth 配置失败.
     pause

@@ -73,6 +73,7 @@ $newPth = @"
 python312.zip
 .
 Lib\site-packages
+..\app
 import site
 "@
 Set-Content -Path $pthFile.FullName -Value $newPth -Encoding ASCII
