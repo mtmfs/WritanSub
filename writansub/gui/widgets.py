@@ -23,6 +23,9 @@ class StateMixin:
         state.update(self.save_state())
         save_gui_state(state)
 
+    def _auto_save(self, *args, **kwargs):
+        self._save_now()
+
 
 
 class _NoScrollMixin:
