@@ -1,4 +1,5 @@
 import dataclasses
+from typing import Any
 
 from writansub.types import Sub, fmt_srt_time
 
