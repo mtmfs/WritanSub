@@ -74,8 +74,25 @@ def _enable_windows_dpi_awareness() -> None:
         pass
 
 
+def _install_excepthook() -> None:
+    from writansub.logger import log_exception
+    prev = sys.excepthook
+
+    def _hook(exc_type, exc, tb):
+        try:
+            log_exception("qt.uncaught", exc)
+        finally:
+            prev(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+
 def main() -> None:
     _enable_windows_dpi_awareness()
+
+    from writansub.logger import init_session_log
+    init_session_log()
+    _install_excepthook()
 
     from writansub.network import setup_hf_mirror
     setup_hf_mirror()

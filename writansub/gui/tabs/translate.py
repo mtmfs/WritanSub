@@ -288,6 +288,11 @@ class TranslateTab(StateMixin, QWidget):
         except CancelledError:
             self._log.log("翻译已取消")
         except Exception as e:
+            from writansub.logger import log_exception, session_log_path
+            log_exception("translate._run_translate", e)
             self._log.log(f"出错: {e}")
+            path = session_log_path()
+            if path:
+                self._log.log(f"详细日志已写入: {path}")
         finally:
             self._signals.finished.emit()

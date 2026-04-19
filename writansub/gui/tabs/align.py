@@ -326,7 +326,12 @@ class AlignmentTab(StateMixin, QWidget):
         except CancelledError:
             self._log.log("对齐已取消")
         except Exception as e:
+            from writansub.logger import log_exception, session_log_path
+            log_exception("align._run_alignment", e)
             self._log.log(f"出错: {e}")
+            path = session_log_path()
+            if path:
+                self._log.log(f"详细日志已写入: {path}")
         finally:
             if model_handle is not None:
                 reg.unload_model(model_handle)

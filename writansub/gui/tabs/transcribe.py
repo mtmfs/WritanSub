@@ -328,7 +328,12 @@ class WhisperTab(StateMixin, QWidget):
         except CancelledError:
             self._log.log("识别已取消")
         except Exception as e:
+            from writansub.logger import log_exception, session_log_path
+            log_exception("transcribe._run_whisper", e)
             self._log.log(f"出错: {e}")
+            path = session_log_path()
+            if path:
+                self._log.log(f"详细日志已写入: {path}")
         finally:
             if wh is not None:
                 reg.release_model(wh)

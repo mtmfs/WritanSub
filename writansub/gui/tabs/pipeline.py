@@ -492,8 +492,14 @@ class PipelineTab(StateMixin, QWidget):
 
     def _run_pipeline(self, cfg):
         from writansub.pipeline.runner import run_pipeline
+        from writansub.logger import log_line, log_exception, session_log_path
 
-        log_emit = self._signals.log_requested.emit
+        log_line(f"Pipeline config: {cfg}")
+
+        def log_emit(msg: str) -> None:
+            log_line(msg)
+            self._signals.log_requested.emit(msg)
+
         prog_emit = self._signals.progress_requested.emit
 
         try:
@@ -501,6 +507,10 @@ class PipelineTab(StateMixin, QWidget):
         except CancelledError:
             log_emit("任务已取消")
         except Exception as e:
+            log_exception("pipeline._run_pipeline", e)
             log_emit(f"发生错误: {e}")
+            path = session_log_path()
+            if path:
+                log_emit(f"详细日志已写入: {path}")
         finally:
             self._signals.finished.emit()

@@ -16,3 +16,4 @@ GUI_STATE_PATH = os.path.join(USER_DATA_DIR, "gui_state.json")
 
 MODELS_DIR = os.environ.get("WRITANSUB_MODELS_DIR", os.path.join(PROJECT_ROOT, "models"))
 CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")
+LOG_DIR = os.environ.get("WRITANSUB_LOG_DIR", os.path.join(PROJECT_ROOT, "logs"))

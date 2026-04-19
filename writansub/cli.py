@@ -518,17 +518,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     _ensure_utf8()
-    from writansub.network import setup_hf_mirror
-    setup_hf_mirror()
     parser = build_parser()
     args = parser.parse_args()
+    from writansub.logger import init_session_log, log_exception, log_line, session_log_path
+    init_session_log()
+    from writansub.network import setup_hf_mirror
+    setup_hf_mirror()
+    log_line(f"CLI subcommand: {getattr(args, 'cmd', '?')}")
     try:
         args.func(args)
     except KeyboardInterrupt:
+        log_line("Interrupted by user")
         sys.stderr.write("\n中断\n")
         sys.exit(1)
     except Exception as e:
+        log_exception("cli.main", e)
+        import traceback as _tb
+        _tb.print_exc(file=sys.stderr)
         sys.stderr.write(f"\n错误: {e}\n")
+        sys.stderr.write(f"详细日志: {session_log_path()}\n")
         sys.exit(1)
 
 

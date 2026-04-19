@@ -29,12 +29,23 @@ def save_wav(waveform: torch.Tensor, path: str, sr: int) -> None:
         wf.writeframes(pcm)
 
 
+def _hf_model_cached(cache_dir: str, repo_id: str) -> bool:
+    dir_name = "models--" + repo_id.replace("/", "--")
+    snap_dir = os.path.join(cache_dir, dir_name, "snapshots")
+    if not os.path.isdir(snap_dir):
+        return False
+    return any(os.scandir(snap_dir))
+
+
 def _load_dnr_model(device: str, cache_dir: str = "") -> Any:
     from writansub.vendor.tiger import TIGERDNR
     from writansub.paths import CACHE_DIR
     cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
-    return TIGERDNR.from_pretrained("JusperLee/TIGER-DnR", cache_dir=cache_dir).to(device).eval()
+    kwargs: dict[str, Any] = {"cache_dir": cache_dir}
+    if _hf_model_cached(cache_dir, "JusperLee/TIGER-DnR"):
+        kwargs["local_files_only"] = True
+    return TIGERDNR.from_pretrained("JusperLee/TIGER-DnR", **kwargs).to(device).eval()
 
 
 def _load_speech_model(device: str, cache_dir: str = "") -> Any:
@@ -42,7 +53,10 @@ def _load_speech_model(device: str, cache_dir: str = "") -> Any:
     from writansub.paths import CACHE_DIR
     cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
-    return TIGER.from_pretrained("JusperLee/TIGER-speech", cache_dir=cache_dir).to(device).eval()
+    kwargs: dict[str, Any] = {"cache_dir": cache_dir}
+    if _hf_model_cached(cache_dir, "JusperLee/TIGER-speech"):
+        kwargs["local_files_only"] = True
+    return TIGER.from_pretrained("JusperLee/TIGER-speech", **kwargs).to(device).eval()
 
 
 def separate_dnr_demucs(
@@ -162,7 +176,6 @@ def _chunk_inference(
     hop = int(sr * hop_length)
     tr_ratio = chunk_length / hop_length
 
-    # 在两端填充 hop 长度，确保首尾块有足够的上下文
     edge_pad = torch.zeros(
         mixture.shape[0], mixture.shape[1], chunk_size - hop,
         dtype=mixture.dtype, device=device,
@@ -174,7 +187,7 @@ def _chunk_inference(
         mixture.shape[0], mixture.shape[1], chunk_size,
         dtype=mixture.dtype, device=device,
     )
-    num_chunks = (padded.shape[-1] - chunk_size) // hop + 1
+    num_chunks = (padded.shape[-1] - chunk_size) // hop + 2
 
     accumulator = torch.zeros(
         mixture.shape[0], n_tracks, mixture.shape[1], padded.shape[-1],
@@ -233,8 +246,8 @@ def separate_speakers(
     finally:
         reg.release_model(h)
 
-    spk1 = separated[0].unsqueeze(0)
-    spk2 = separated[1].unsqueeze(0)
+    spk1 = separated[0]
+    spk2 = separated[1]
     return spk1, spk2
 
 
@@ -292,9 +305,8 @@ def separate_speakers_tfgridnet(
     try:
         _log("正在进行说话人分离 (TF-GridNet)...")
         mono_np = wav.squeeze(0).numpy().astype(np.float32)
-        # spatialized 模型需要双声道输入，复制单声道为立体声
-        stereo_np = np.stack([mono_np, mono_np], axis=0)  # [2, T]
-        outputs = model(stereo_np[np.newaxis, :], fs=model_sr)  # [1, 2, T]
+        stereo_np = np.stack([mono_np, mono_np], axis=-1)  # [T, 2]
+        outputs = model(stereo_np[np.newaxis, :], fs=model_sr)  # [1, T, 2]
 
         spk1 = torch.from_numpy(np.atleast_1d(outputs[0])).float()
         spk2 = torch.from_numpy(np.atleast_1d(outputs[1])).float()

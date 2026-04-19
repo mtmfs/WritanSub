@@ -418,8 +418,7 @@ def _whisper_with_overlap(
 
     commented = set()
     for i, sub in enumerate(full_subs):
-        mid = (sub.start + sub.end) / 2
-        if any(r.start <= mid <= r.end for r in overlap_regions):
+        if any(max(r.start, sub.start) < min(r.end, sub.end) for r in overlap_regions):
             commented.add(i)
 
     active = [s for i, s in enumerate(full_subs) if i not in commented] + overlap_subs

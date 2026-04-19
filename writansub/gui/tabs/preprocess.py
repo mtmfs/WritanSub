@@ -313,7 +313,12 @@ class TigerTab(StateMixin, QWidget):
         except CancelledError:
             log("处理已取消")
         except Exception as e:
+            from writansub.logger import log_exception, session_log_path
+            log_exception("preprocess._run_tiger", e)
             log(f"处理出错: {e}")
+            path = session_log_path()
+            if path:
+                log(f"详细日志已写入: {path}")
         finally:
             self._signals.finished.emit()
 

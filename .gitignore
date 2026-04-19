@@ -45,6 +45,9 @@ native/target/
 # 模型缓存
 cache/
 
+# 运行日志
+logs/
+
 # 临时文档 & 草稿
 Audit_Report_*.txt
 Compact_GUI_Layout_Proposal.html
