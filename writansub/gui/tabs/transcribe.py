@@ -295,7 +295,13 @@ class WhisperTab(StateMixin, QWidget):
                      model_size: str, device: str, wc_threshold: float,
                      cond_prev: bool = True, vad_filter: bool = False,
                      initial_prompt: str | None = None):
+        from writansub.logger import log_line
+
         reg = ResourceRegistry.instance()
+
+        def log_emit(msg: str) -> None:
+            log_line(msg)
+            self._log.log(msg)
 
         def _w_factory():
             from faster_whisper import WhisperModel
@@ -307,7 +313,7 @@ class WhisperTab(StateMixin, QWidget):
             whisper_model = reg.get_model(wh)
 
             subs, word_data = transcribe(
-                media, lang=lang, device=device, log_callback=self._log.log,
+                media, lang=lang, device=device, log_callback=log_emit,
                 progress_callback=self._progress.update_progress,
                 condition_on_previous_text=cond_prev, model=whisper_model,
                 vad_filter=vad_filter,

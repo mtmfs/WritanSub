@@ -6,7 +6,9 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import threading
+import time
 from typing import TYPE_CHECKING, Any, Callable
 
 import writansub_native
@@ -15,6 +17,28 @@ if TYPE_CHECKING:
     import torch
 
 log = logging.getLogger(__name__)
+
+
+def _gpu_mem_hint(device: str) -> str:
+    """Return ' [alloc=…GB free=…/…GB]' when device is CUDA and torch is loaded, else ''."""
+    if not device or not device.startswith("cuda") or "torch" not in sys.modules:
+        return ""
+    try:
+        torch = sys.modules["torch"]
+        if not torch.cuda.is_available():
+            return ""
+        idx = 0
+        if ":" in device:
+            try:
+                idx = int(device.split(":", 1)[1])
+            except ValueError:
+                pass
+        free_b, total_b = torch.cuda.mem_get_info(idx)
+        alloc_b = torch.cuda.memory_allocated(idx)
+        g = 1024 ** 3
+        return f" [alloc={alloc_b/g:.2f}GB free={free_b/g:.2f}/{total_b/g:.2f}GB]"
+    except Exception:
+        return ""
 
 
 class CancelledError(Exception):
@@ -78,37 +102,58 @@ class ResourceRegistry:
             raise CancelledError("任务已取消")
 
     def register_model(self, name: str, obj: Any, device: str = "") -> int:
+        from writansub.logger import log_line
         handle = self._native.register_model(obj)
         self._model_handles[(name, device)] = handle
-        log.debug(f"Native Model Registered: {handle} ({name})")
+        log_line(f"[model] registered name={name!r} device={device!r} handle={handle}{_gpu_mem_hint(device)}")
         return handle
 
     def acquire_model(self, name: str, device: str, factory: Callable[[], Any]) -> int:
+        from writansub.logger import log_line
         key = (name, device)
         if key in self._model_handles:
             handle = self._model_handles[key]
             # 尝试在原生层获取，如果失败（可能被 unload 了），则重新加载
             try:
                 self._native.get_model(handle)
-                log.debug(f"Reusing cached model: {name} on {device}")
+                log_line(f"[model] reuse cached name={name!r} device={device!r} handle={handle}")
                 return handle
-            except Exception:
-                log.debug(f"Cached handle {handle} invalid, reloading...")
+            except Exception as e:
+                log_line(f"[model] cached handle={handle} invalid for {name!r}: {e!r}, reloading")
                 del self._model_handles[key]
 
-        obj = factory()
+        log_line(f"[model] loading name={name!r} device={device!r} ...{_gpu_mem_hint(device)}")
+        t0 = time.monotonic()
+        try:
+            obj = factory()
+        except BaseException as e:
+            elapsed = time.monotonic() - t0
+            log_line(
+                f"[model] LOAD FAILED name={name!r} device={device!r} "
+                f"after {elapsed:.2f}s: {type(e).__name__}: {e}"
+            )
+            raise
+        elapsed = time.monotonic() - t0
+        log_line(f"[model] loaded name={name!r} device={device!r} in {elapsed:.2f}s{_gpu_mem_hint(device)}")
         return self.register_model(name, obj, device)
 
     def get_model(self, handle: int) -> Any:
         return self._native.get_model(handle)
 
     def release_model(self, handle: int) -> None:
+        from writansub.logger import log_line
         self._native.release_model(handle)
+        log_line(f"[model] released handle={handle}")
 
     def unload_model(self, handle: int) -> None:
+        from writansub.logger import log_line
+        key = next((k for k, v in self._model_handles.items() if v == handle), None)
+        device = key[1] if key else ""
+        log_line(f"[model] unloading handle={handle} key={key}{_gpu_mem_hint(device)}")
         self._native.unload_model(handle)
         self._model_handles = {k: v for k, v in self._model_handles.items() if v != handle}
         gc.collect()
+        log_line(f"[model] unloaded handle={handle}{_gpu_mem_hint(device)}")
 
     def run_subprocess(self, cmd: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
         handle = self._native.spawn_process(cmd)
@@ -140,6 +185,21 @@ class ResourceRegistry:
             stdout = bytes(stdout)
         if isinstance(stderr, list):
             stderr = bytes(stderr)
+
+        if stderr:
+            try:
+                from writansub.logger import log_line
+                exe = os.path.basename(cmd[0]) if cmd else "?"
+                raw = stderr.decode("utf-8", errors="replace")
+                limit = 4000
+                if len(raw) > limit:
+                    head_n, tail_n = 2000, 1000
+                    elided = len(raw) - head_n - tail_n
+                    raw = f"{raw[:head_n]} ... [{elided} chars elided] ... {raw[-tail_n:]}"
+                text = raw.replace("\n", " | ").replace("\r", "")
+                log_line(f"stderr[{exe}] ({len(stderr)}B, rc={code}): {text}")
+            except Exception:
+                pass
 
         return subprocess.CompletedProcess(cmd, code, stdout, stderr)
 

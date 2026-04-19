@@ -271,8 +271,12 @@ class TigerTab(StateMixin, QWidget):
     def _run_tiger(self, media_files: list[str], mss_model: str, do_separate: bool,
                    ss_model: str, save_intermediate: bool, device: str):
         from writansub.preprocess.core import run_dnr_batch, run_speech_batch
+        from writansub.logger import log_line
 
-        log = self._log.log
+        def log(msg: str) -> None:
+            log_line(msg)
+            self._log.log(msg)
+
         progress = self._progress.update_progress
 
         try:

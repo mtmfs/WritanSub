@@ -267,6 +267,12 @@ class TranslateTab(StateMixin, QWidget):
         thread.start()
 
     def _run_translate(self, srt: str, output: str, cfg: dict, bilingual: bool):
+        from writansub.logger import log_line
+
+        def log_emit(msg: str) -> None:
+            log_line(msg)
+            self._log.log(msg)
+
         try:
             subs = parse_srt(srt)
             translate_subs(
@@ -275,7 +281,7 @@ class TranslateTab(StateMixin, QWidget):
                 api_base=cfg["api_base"],
                 api_key=cfg["api_key"],
                 model=cfg["model"],
-                log_callback=self._log.log,
+                log_callback=log_emit,
                 progress_callback=self._progress.update_progress,
             )
 

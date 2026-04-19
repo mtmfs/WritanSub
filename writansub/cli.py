@@ -524,7 +524,7 @@ def main() -> None:
     init_session_log()
     from writansub.network import setup_hf_mirror
     setup_hf_mirror()
-    log_line(f"CLI subcommand: {getattr(args, 'cmd', '?')}")
+    log_line(f"CLI subcommand: {getattr(args, 'command', '?')}")
     try:
         args.func(args)
     except KeyboardInterrupt:

@@ -75,6 +75,13 @@ def run_pipeline(
     word_results: dict[str, Any] = {}
     tiger_results: dict[str, Any] = {}
 
+    log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} ss={cfg.ss_model} "
+        f"align_model={cfg.align_model} has_ref={has_ref} skip_align={skip_align} "
+        f"translate={cfg.translate} device={cfg.device}")
+    log(f"[决策] whisper={cfg.whisper_model} lang={cfg.lang} "
+        f"condition_on_prev={cfg.condition_on_prev} vad_filter={cfg.vad_filter}")
+    log(f"[文件] 共 {total} 个: {[os.path.basename(m) for m in cfg.media_files]}")
+
     # Phase: TIGER 增强
     if cfg.tiger_mode and not _cancelled():
         tiger_results = _run_tiger_phase(
@@ -108,6 +115,7 @@ def run_pipeline(
             )
             sub_results[media] = subs
             word_results[media] = word_data
+            log(f"[Whisper {idx}/{total}] 产出 {len(subs)} 条字幕, {sum(len(w) for w in word_data)} 个词")
 
             base = os.path.splitext(media)[0]
             if cfg.generate_review and cfg.word_conf_threshold > 0:
@@ -216,6 +224,12 @@ def run_pipeline(
 
                 final = post_process(aligned, **pp)
                 aligned_results[media] = final
+                if final:
+                    avg = sum(s.score for s in final) / len(final)
+                    low = sum(1 for s in final if s.score < cfg.align_conf_threshold) if cfg.align_conf_threshold > 0 else 0
+                    log(f"[对齐 {idx}/{total}] {len(final)} 条, avg score={avg:.3f}, 低置信={low}")
+                else:
+                    log(f"[对齐 {idx}/{total}] 结果为空")
 
                 base = os.path.splitext(media)[0]
                 if cfg.generate_review and cfg.align_conf_threshold > 0:
@@ -255,6 +269,8 @@ def run_pipeline(
                 log_callback=log, progress_callback=_t_p,
                 cancelled=_cancelled,
             )
+            done = sum(1 for s in aligned_results[media] if s.translated)
+            log(f"[翻译 {idx}/{total}] {done}/{len(aligned_results[media])} 条完成翻译")
             write_srt(
                 merge_bilingual(aligned_results[media]),
                 os.path.splitext(media)[0] + ".srt",

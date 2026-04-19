@@ -277,12 +277,18 @@ class AlignmentTab(StateMixin, QWidget):
                        device: str, pp: dict[str, float],
                        lang: str = "ja", align_model: str = "mms_fa"):
         import torch
+        from writansub.logger import log_line
 
         reg = ResourceRegistry.instance()
         model_handle = None
+
+        def log_emit(msg: str) -> None:
+            log_line(msg)
+            self._log.log(msg)
+
         try:
             if device == "cuda" and not torch.cuda.is_available():
-                self._log.log("CUDA 不可用，回退到 CPU")
+                log_emit("CUDA 不可用，回退到 CPU")
                 device = "cpu"
 
             self._progress.update_progress(0.0, "加载音频...")
@@ -290,7 +296,7 @@ class AlignmentTab(StateMixin, QWidget):
 
             self._progress.update_progress(0.05, "解析字幕...")
             subs = parse_srt(srt, lang=lang)
-            self._log.log(f"字幕条数: {len(subs)}")
+            log_emit(f"字幕条数: {len(subs)}")
 
             self._progress.update_progress(0.1, "加载模型...")
             pad_sec = pp.pop("pad_sec", 0.5)
@@ -303,7 +309,7 @@ class AlignmentTab(StateMixin, QWidget):
                     waveform, subs, device=device, pad_sec=pad_sec,
                     progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
                     model=qwen3_model, lang=lang,
-                    log_callback=self._log.log,
+                    log_callback=log_emit,
                 )
             else:
                 model_bundle = init_model(device)
@@ -313,7 +319,7 @@ class AlignmentTab(StateMixin, QWidget):
                     waveform, subs, device=device, pad_sec=pad_sec,
                     progress_callback=lambda p, m: self._progress.update_progress(0.1 + p * 0.85, m),
                     model_bundle=model_bundle,
-                    log_callback=self._log.log,
+                    log_callback=log_emit,
                 )
 
             self._progress.update_progress(0.95, "后处理...")
@@ -322,9 +328,9 @@ class AlignmentTab(StateMixin, QWidget):
 
             write_srt(final, output)
             self._progress.update_progress(1.0, "对齐完成")
-            self._log.log(f"完成! 输出: {output}")
+            log_emit(f"完成! 输出: {output}")
         except CancelledError:
-            self._log.log("对齐已取消")
+            log_emit("对齐已取消")
         except Exception as e:
             from writansub.logger import log_exception, session_log_path
             log_exception("align._run_alignment", e)
