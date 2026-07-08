@@ -690,8 +690,6 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 本项目包含一个 Rust 原生扩展（`native/`），用于进程管理与模型资源注册。
 
-开发前请先阅读 [`CLAUDE.md`](CLAUDE.md) 了解架构与常用命令。
-
 主要技术栈：
 
 - Python 3.12 + PySide6（GUI）

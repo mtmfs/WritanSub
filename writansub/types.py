@@ -46,7 +46,6 @@ SS_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
     ("TIGER", [
         ("tiger-speech", "~1 GB"),
     ]),
-    # TODO: TF-GridNet spatialized 模型不兼容单声道输入，需换用单声道兼容模型
 ]
 
 ALIGN_MODELS: list[tuple[str, list[tuple[str, str]]]] = [

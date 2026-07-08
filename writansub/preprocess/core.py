@@ -3,7 +3,6 @@ import wave
 from dataclasses import dataclass
 from typing import Any, Callable
 
-import numpy as np
 import torch
 import torchaudio.transforms as T
 
@@ -251,83 +250,6 @@ def separate_speakers(
     return spk1, spk2
 
 
-def separate_speakers_tfgridnet(
-    dialog_wav: torch.Tensor,
-    dialog_sr: int,
-    device: str = "cpu",
-    log_callback: Callable[[str], None] | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    _log = log_callback or (lambda msg: None)
-
-    model_sr = 8000
-    out_sr = 16000
-
-    wav = T.Resample(dialog_sr, model_sr)(dialog_wav)
-    if wav.dim() == 1:
-        wav = wav.unsqueeze(0)
-
-    _log("加载 TF-GridNet 模型...")
-    import os
-    from writansub.paths import MODELS_DIR
-
-    reg = ResourceRegistry.instance()
-
-    def _factory() -> Any:
-        from espnet2.bin.enh_inference import SeparateSpeech
-
-        local_base = os.path.join(
-            MODELS_DIR, "tfgridnet",
-            "models--espnet--yoshiki_wsj0_2mix_spatialized_enh_tfgridnet_waspaa2023_raw",
-        )
-        snapshot_dir = os.path.join(local_base, "snapshots")
-        if os.path.isdir(snapshot_dir):
-            snaps = os.listdir(snapshot_dir)
-            if snaps:
-                snap = os.path.join(snapshot_dir, snaps[0])
-                exp_dir = os.path.join(snap, "exp", "enh_train_enh_tfgridnet_waspaa2023_raw")
-                return SeparateSpeech(
-                    train_config=os.path.join(exp_dir, "config.yaml"),
-                    model_file=os.path.join(exp_dir, "25epoch.pth"),
-                    normalize_output_wav=True,
-                    device=device,
-                )
-
-        # 回退到远程下载
-        return SeparateSpeech.from_pretrained(
-            model_tag="espnet/yoshiki_wsj0_2mix_spatialized_enh_tfgridnet_waspaa2023_raw",
-            normalize_output_wav=True,
-            device=device,
-        )
-
-    h = reg.acquire_model("tfgridnet", device, _factory)
-    model = reg.get_model(h)
-
-    try:
-        _log("正在进行说话人分离 (TF-GridNet)...")
-        mono_np = wav.squeeze(0).numpy().astype(np.float32)
-        stereo_np = np.stack([mono_np, mono_np], axis=-1)  # [T, 2]
-        outputs = model(stereo_np[np.newaxis, :], fs=model_sr)  # [1, T, 2]
-
-        spk1 = torch.from_numpy(np.atleast_1d(outputs[0])).float()
-        spk2 = torch.from_numpy(np.atleast_1d(outputs[1])).float()
-        if spk1.dim() == 1:
-            spk1 = spk1.unsqueeze(0)  # [1, T]
-        elif spk1.dim() > 1:
-            spk1 = spk1.mean(dim=0, keepdim=True)
-        if spk2.dim() == 1:
-            spk2 = spk2.unsqueeze(0)
-        elif spk2.dim() > 1:
-            spk2 = spk2.mean(dim=0, keepdim=True)
-
-        # 重采样到 16kHz（与 TIGER-Speech 输出一致）
-        spk1 = T.Resample(model_sr, out_sr)(spk1)
-        spk2 = T.Resample(model_sr, out_sr)(spk2)
-    finally:
-        reg.release_model(h)
-
-    return spk1, spk2
-
-
 _silero_cache: tuple[Any, Any] | None = None
 
 
@@ -468,14 +390,9 @@ def run_speech_batch(
         _file_progress = _make_file_progress(idx, total, progress_callback)
 
         _file_progress(0.0, "正在分离说话人...")
-        if ss_model == "tfgridnet-wsj0-2mix":
-            spk1, spk2 = separate_speakers_tfgridnet(
-                data["dialog_wav"], 44100, device=device, log_callback=_log,
-            )
-        else:
-            spk1, spk2 = separate_speakers(
-                data["dialog_wav"], 44100, device=device, cache_dir=cache_dir, log_callback=_log,
-            )
+        spk1, spk2 = separate_speakers(
+            data["dialog_wav"], 44100, device=device, cache_dir=cache_dir, log_callback=_log,
+        )
 
         if save_intermediate:
             out_dir = os.path.dirname(media)

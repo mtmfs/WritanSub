@@ -51,7 +51,7 @@ def _collect_runtime_info() -> list[str]:
         except Exception as e:
             lines.append(f"torch inspect failed: {e!r}")
 
-    for name in ("faster_whisper", "huggingface_hub", "demucs", "espnet2"):
+    for name in ("faster_whisper", "huggingface_hub", "demucs"):
         if name in mods:
             ver = getattr(mods[name], "__version__", "?")
             lines.append(f"{name} {ver}")

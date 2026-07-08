@@ -13,7 +13,6 @@ def translate_subs(
     batch_size: int = 20,
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
-    cancelled: Callable[[], bool] | None = None,
 ) -> list[Sub]:
     """翻译结果写入每条 Sub 的 translated 字段，原地修改。"""
     from openai import OpenAI

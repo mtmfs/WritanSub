@@ -41,8 +41,6 @@ dependencies = [
     "imageio-ffmpeg",
     "qwen-asr",
     "demucs",
-    "espnet",
-    "espnet-model-zoo",
     "writansub_native",
     "platformdirs>=3.0.0",
 ]

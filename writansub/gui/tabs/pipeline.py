@@ -19,7 +19,6 @@ from writansub.gui.widgets import (
 
 class _PipelineSignals(QObject):
     finished = Signal()
-    enable_start = Signal(bool)
     log_requested = Signal(str)
     progress_requested = Signal(float, str)
 
@@ -40,7 +39,6 @@ class PipelineTab(StateMixin, QWidget):
 
         self._signals = _PipelineSignals()
         self._signals.finished.connect(self._on_finished)
-        self._signals.enable_start.connect(self._set_buttons_state)
         self._signals.log_requested.connect(lambda msg: self._log.log(msg))
         self._signals.progress_requested.connect(lambda pct, msg: self._progress.update_progress(pct, msg))
 

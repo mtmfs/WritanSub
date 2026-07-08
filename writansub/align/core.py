@@ -204,7 +204,6 @@ def run_alignment(
     progress_callback: Callable[[float, str], None] | None = None,
     model_bundle: tuple[Any, Any, Any] | None = None,
     log_callback: Callable[[str], None] | None = None,
-    cancelled: Callable[[], bool] | None = None,
     *,
     qwen3_model: Any | None = None,
     lang: str = "ja",
@@ -283,7 +282,6 @@ def run_qwen3_alignment(
     model: Any | None = None,
     lang: str = "ja",
     log_callback: Callable[[str], None] | None = None,
-    cancelled: Callable[[], bool] | None = None,
 ) -> list[Sub]:
     """run_alignment 的 Qwen3 便捷入口。"""
     if model is None:
@@ -291,7 +289,7 @@ def run_qwen3_alignment(
     return run_alignment(
         waveform, subs, device=device, pad_sec=pad_sec,
         progress_callback=progress_callback,
-        log_callback=log_callback, cancelled=cancelled,
+        log_callback=log_callback,
         qwen3_model=model, lang=lang,
     )
 

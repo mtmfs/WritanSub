@@ -55,8 +55,6 @@ def run_pipeline(
     progress: Callable[[float, str], None],
 ) -> None:
     """TIGER → Whisper → 对齐 → 翻译。"""
-    import torch
-
     reg = ResourceRegistry.instance()
 
     def _cancelled() -> bool:
@@ -72,7 +70,6 @@ def run_pipeline(
     total = len(cfg.media_files)
 
     sub_results: dict[str, Any] = {}
-    word_results: dict[str, Any] = {}
     tiger_results: dict[str, Any] = {}
 
     log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} ss={cfg.ss_model} "
@@ -114,7 +111,6 @@ def run_pipeline(
                 media, tiger_results.get(media), cfg, whisper_model, _w_p, log,
             )
             sub_results[media] = subs
-            word_results[media] = word_data
             log(f"[Whisper {idx}/{total}] 产出 {len(subs)} 条字幕, {sum(len(w) for w in word_data)} 个词")
 
             base = os.path.splitext(media)[0]
@@ -210,7 +206,6 @@ def run_pipeline(
                         progress_callback=_a_p,
                         model=qwen3_model, lang=cfg.lang,
                         log_callback=log,
-                        cancelled=_cancelled,
                     )
                 else:
                     populate_romaji(sub_results[media], cfg.lang)
@@ -219,7 +214,6 @@ def run_pipeline(
                         device=cfg.device, pad_sec=cfg.pad_sec,
                         progress_callback=_a_p, model_bundle=mms_bundle,
                         log_callback=log,
-                        cancelled=_cancelled,
                     )
 
                 final = post_process(aligned, **pp)
@@ -267,7 +261,6 @@ def run_pipeline(
                 model=cfg.llm_model,
                 batch_size=cfg.batch_size,
                 log_callback=log, progress_callback=_t_p,
-                cancelled=_cancelled,
             )
             done = sum(1 for s in aligned_results[media] if s.translated)
             log(f"[翻译 {idx}/{total}] {done}/{len(aligned_results[media])} 条完成翻译")
