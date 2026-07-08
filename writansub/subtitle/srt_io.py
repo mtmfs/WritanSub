@@ -20,9 +20,32 @@ def _subs_from_pysrt(items: Any, lang: str | None) -> list[Sub]:
     return result
 
 
-def parse_srt(path: str, lang: str = "ja") -> list[Sub]:
+def _candidate_encodings(path: str) -> list[str]:
+    """按优先级返回候选编码：utf-8-sig（兼容 BOM/纯 utf-8）→ 探测结果 → 常见东亚编码。"""
+    candidates = ["utf-8-sig"]
+    try:
+        from charset_normalizer import from_path
+        best = from_path(path).best()
+        if best and best.encoding and best.encoding not in candidates:
+            candidates.append(best.encoding)
+    except Exception:
+        pass
+    for enc in ("gbk", "shift_jis"):
+        if enc not in candidates:
+            candidates.append(enc)
+    return candidates
+
+
+def parse_srt(path: str, lang: str | None = None) -> list[Sub]:
     import pysrt
-    return _subs_from_pysrt(pysrt.open(path, encoding='utf-8'), lang)
+
+    last_err: Exception | None = None
+    for enc in _candidate_encodings(path):
+        try:
+            return _subs_from_pysrt(pysrt.open(path, encoding=enc), lang)
+        except (UnicodeDecodeError, LookupError) as e:
+            last_err = e
+    raise ValueError(f"无法解码字幕文件 {path}: 不是 utf-8/gbk/shift_jis 等已知编码") from last_err
 
 
 def parse_srt_string(text: str, lang: str | None = None) -> list[Sub]:

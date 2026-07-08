@@ -159,6 +159,8 @@ class TranslateTab(StateMixin, QWidget):
             "api_base": self._base_edit.text(),
             "api_key": self._key_edit.text(),
             "model": self._model_edit.text(),
+            # UI 无 batch_size 控件，保留配置文件里的手工值，避免整体覆写时被抹掉
+            "batch_size": load_translate_config().get("batch_size", 20),
         }
 
     def save_state(self) -> dict:
@@ -170,7 +172,6 @@ class TranslateTab(StateMixin, QWidget):
             "translate.target_lang": self._target_combo.currentText(),
             "translate.model": self._model_edit.text(),
             "translate.api_base": self._base_edit.text(),
-            "translate.api_key": self._key_edit.text(),
             "translate.bilingual": self._chk_bilingual.isChecked(),
         }
 
@@ -185,8 +186,6 @@ class TranslateTab(StateMixin, QWidget):
             self._model_edit.setText(state["translate.model"])
         if "translate.api_base" in state:
             self._base_edit.setText(state["translate.api_base"])
-        if "translate.api_key" in state:
-            self._key_edit.setText(state["translate.api_key"])
         if "translate.bilingual" in state:
             self._chk_bilingual.setChecked(state["translate.bilingual"])
 
@@ -281,6 +280,7 @@ class TranslateTab(StateMixin, QWidget):
                 api_base=cfg["api_base"],
                 api_key=cfg["api_key"],
                 model=cfg["model"],
+                batch_size=cfg.get("batch_size", 20),
                 log_callback=log_emit,
                 progress_callback=self._progress.update_progress,
             )

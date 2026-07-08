@@ -166,7 +166,7 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         ss_model=args.ss_model,
         save_intermediate=args.save_intermediate,
         ref_srt=args.ref_srt,
-        use_ref_sub=args.ref_sub_track is not None,
+        use_ref_sub=args.ref_embedded or args.ref_sub_track is not None,
         ref_sub_track=args.ref_sub_track,
         ref_direct=args.ref_direct,
         keep_whisper_srt=args.keep_whisper_srt,
@@ -454,8 +454,10 @@ def build_parser() -> argparse.ArgumentParser:
     g_tiger.add_argument("--save-intermediate", action="store_true", help="保存中间音轨")
     g_ref = p_pipe.add_argument_group("参考字幕")
     g_ref.add_argument("--ref-srt", default=None, help="外部参考 SRT 文件路径 (时间轴参考)")
+    g_ref.add_argument("--ref-embedded", action="store_true",
+                       help="启用内嵌字幕参考，按语言自动选轨")
     g_ref.add_argument("--ref-sub-track", type=int, default=None,
-                       help="内嵌字幕轨索引 (默认: 按语言自动匹配)")
+                       help="内嵌字幕轨索引 (指定后覆盖自动选轨)")
     g_ref.add_argument("--ref-direct", action="store_true",
                        help="直接使用参考时间轴，跳过强制对齐")
     g_out = p_pipe.add_argument_group("输出")

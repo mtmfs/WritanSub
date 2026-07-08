@@ -1,3 +1,5 @@
+# [WritanSub 本地化改动] wav_chunk_inference 内加入 ResourceRegistry.checkpoint()
+# 以支持推理中途暂停/取消；与上游 TIGER 仓库不一致，升级 vendor 时需保留。
 import inspect
 import torch
 import numpy as np
@@ -848,7 +850,12 @@ class TIGERDNR(BaseModel):
         if num_session % batch_size > 0:
             num_batch += 1
         
+        # [WritanSub 本地改动] 逐批 checkpoint，使 DnR 分离期间可暂停/取消（上游无此逻辑）
+        from writansub.bridge import ResourceRegistry
+        _reg = ResourceRegistry.instance()
+
         for i in range(num_batch):
+            _reg.checkpoint()
 
             this_input = all_input[i*batch_size:(i+1)*batch_size]
             actual_batch_size = this_input.shape[0]

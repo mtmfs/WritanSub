@@ -12,7 +12,7 @@ from writansub.types import MEDIA_FILETYPES, SRT_FILETYPES, LANGUAGES, WHISPER_M
 from writansub.transcribe.core import transcribe
 from writansub.subtitle.review import generate_review, write_review_files
 from writansub.subtitle.srt_io import write_srt
-from writansub.config import PARAM_DEFS, load_gui_state
+from writansub.config import PARAM_DEFS, load_gui_state, load_pp_config
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin
 
@@ -101,6 +101,7 @@ class WhisperTab(StateMixin, QWidget):
         self._wc_spin.setRange(wc_def["from"], wc_def["to"])
         self._wc_spin.setSingleStep(wc_def["inc"])
         self._wc_spin.setDecimals(2)
+        self._wc_spin.setValue(load_pp_config()["word_conf_threshold"])
         param_layout.addWidget(self._wc_spin)
 
         self._chk_cond_prev = QCheckBox("上文关联")

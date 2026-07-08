@@ -63,7 +63,13 @@ def _get_ffprobe() -> str:
     ffmpeg = _get_ffmpeg()
     dirpath = os.path.dirname(ffmpeg)
     probe_name = os.path.basename(ffmpeg).replace("ffmpeg", "ffprobe")
-    return os.path.join(dirpath, probe_name) if dirpath else probe_name
+    candidate = os.path.join(dirpath, probe_name) if dirpath else probe_name
+    if not os.path.isfile(candidate):
+        raise FileNotFoundError(
+            "未找到 ffprobe: imageio-ffmpeg 只自带 ffmpeg 不含 ffprobe，"
+            "内嵌字幕轨探测需要系统 ffmpeg。请安装 ffmpeg(含 ffprobe)并加入 PATH"
+        )
+    return candidate
 
 class ResourceRegistry:
     _instance: "ResourceRegistry | None" = None

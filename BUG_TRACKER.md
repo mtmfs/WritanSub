@@ -35,7 +35,7 @@ T03 附带收益：修复即顺带消掉 T16（pip 安装断裂）、P4 的 Ctrl
 | [ ] | T04 | 输出互相覆盖：whisper SRT 与最终结果都写 `<base>.srt`，`keep_whisper_srt` 无效；流水线开翻译时强制双语（`runner.py:126/274-280`） | A:WS-04 + B:#3 | 低 | 中※ | 15–30 行 + README |
 | [x] | T05 | Qwen3 + TIGER 组合必崩：`import torchaudio.transforms as T` 只在 MMS 分支内，Qwen3 路径引用 `T.Resample` 抛 UnboundLocalError；TIGER 输出 44100≠16000 使该路径必然触发（`runner.py:179/202`，B 已复现验证） | A:WS-05 + B:#2 | 极低 | 低 | 1–2 行 |
 | [ ] | T06 | review 索引体系错位：按原始编号生成 → ref 映射/短字幕合并重编号 → 用新编号回标旧文件，标错行；ASS 侧 `rfind(",,")` 解析脆弱；词全高置信时对齐标注静默丢失。根治 = 内存中标记、索引稳定后一次性生成 | A:WS-06+P4 + B:#4/#5 | 中高 | 中 | 60–120 行（runner.py + review.py 数据流重排） |
-| [ ] | T07 | 翻译中途取消丢弃全部已付费译文：译文攒局部 dict 最后才回写（`translate/core.py:30/83-85`）。改为每批完成即回写 | A:WS-07 | 低 | 低 | 5–10 行 |
+| [x] | T07 | 翻译中途取消丢弃全部已付费译文：译文攒局部 dict 最后才回写（`translate/core.py:30/83-85`）。改为每批完成即回写 | A:WS-07 | 低 | 低 | 5–10 行 |
 | [ ] | T08 | 翻译完全信任 LLM 回显编号：不校验编号属于当前批次（整批重编号=常见失败模式，译文写错条并覆盖前批）；失败批次无重试只记日志 | B:#25 | 低中 | 低 | 30–50 行 |
 | [ ] | T09 | GUI 跨页共享全局控制状态：B 页"开始"清掉 A 页取消请求，任一页"取消"取消所有任务，两任务可同抢 GPU。最简方案 = 运行中全局互斥禁用其他页启动 | A:WS-08 | 中 | 中 | 30–60 行 |
 
@@ -49,19 +49,19 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
 | [ ] | T10 | separate 模式三连：重叠字幕被 `curr.end=nxt.start` 压平；`_whisper_with_overlap` 漏传 `vad_filter`；word_data 算完即弃 → review 静默失效 | A:WS-09 + B:#30(半) | 中 | 中 | 20–40 行 |
-| [ ] | T11 | API key 明文三处：pipeline 日志（`pipeline.py:497`）+ `gui_state.json` + `writansub_translate.json`。日志脱敏 + gui_state 去 key | A:WS-10 + B:#11 | 低 | 低 | 10–20 行 |
+| [x] | T11 | API key 明文三处：pipeline 日志（`pipeline.py:497`）+ `gui_state.json` + `writansub_translate.json`。日志脱敏 + gui_state 去 key | A:WS-10 + B:#11 | 低 | 低 | 10–20 行 |
 | [ ] | T12 | 镜像探测不可靠，双盲区：裸 socket 不走系统代理（Clash 场景误判，A 视角）+ TCP 通但 SNI 阶段被重置误判可达（B 视角）。改为经代理的 HTTPS 实测（network.py 全文件仅 20 行） | A:WS-11 + B:#28a | 低中 | 中 | 10–25 行 |
 | [ ] | T13 | silero-vad 走 `torch.hub` 从 GitHub 下载、无任何镜像处理，国内开 VAD 必败。换 silero-vad pip 包或预置模型 | B:#28b | 中 | 中 | 10–30 行 |
-| [ ] | T14 | ffprobe 回退路径必败：imageio-ffmpeg 不含 ffprobe，推导路径不存在，"参考内嵌字幕"无系统 ffmpeg 必败且被吞异常。明确报错+提示，或改用 ffmpeg 探测 | A:WS-12 + B:#8 | 低 | 低 | 10–30 行 |
-| [ ] | T15 | CLI 无法表达"自动选轨"（帮助文本承诺永不可达）；`select_track` 未命中语言时静默回退第一轨，signs 轨会静默丢大量台词 | A:WS-13 + B:#30(半) | 低 | 低 | 15–30 行 |
+| [x] | T14 | ffprobe 回退路径必败：imageio-ffmpeg 不含 ffprobe，推导路径不存在，"参考内嵌字幕"无系统 ffmpeg 必败且被吞异常。明确报错+提示，或改用 ffmpeg 探测 | A:WS-12 + B:#8 | 低 | 低 | 10–30 行 |
+| [x] | T15 | CLI 无法表达"自动选轨"（帮助文本承诺永不可达）；`select_track` 未命中语言时静默回退第一轨，signs 轨会静默丢大量台词 | A:WS-13 + B:#30(半) | 低 | 低 | 15–30 行 |
 | [ ] | T16 | pip 安装路径断裂：`writansub_native` 不在 PyPI（B 实测 404），uv sources 映射对 pip 无效，README 方法二不可用 | A:WS-14 + B:#9 | — | — | 做 T03 方案 B 自动消失；否则文档+pyproject ~10 行 |
 | [ ] | T17 | 波形常驻内存（批处理全量留 RAM，2h 文件单条 dialog ~1.27GB）+ 模型阶段间从不卸载（`release_model` 只清死标志），6–8GB 卡后期 OOM | A:WS-15 + B:#13 | 中 | 中高※ | 30–60 行 |
-| [ ] | T18 | 非 UTF-8 字幕直接 UnicodeDecodeError（GBK/Shift-JIS 存量极常见）。utf-8-sig 优先 + 编码探测回退 | A:WS-16 + B:#27 | 低 | 低 | 10–20 行 |
-| [ ] | T19 | `_hf_model_cached` 见 snapshots 非空即强制 `local_files_only`，半截下载把用户锁死离线且报错不指真因 | B:#29 | 低 | 低 | 5–15 行 |
-| [ ] | T20 | align 页每次运行冷加载模型（init+register+finally unload），与 pipeline/whisper 页的 acquire 缓存模式不一致，重复打轴极慢 | B:#14b | 低 | 低中 | 10–20 行 |
-| [ ] | T21 | vendor `wav_chunk_inference` 内部循环无 checkpoint，DnR 单轨分离数分钟内取消/暂停完全无响应（自研 `_chunk_inference` 反而每块都有） | B:#15b | 低 | 低 | 5–10 行 |
+| [x] | T18 | 非 UTF-8 字幕直接 UnicodeDecodeError（GBK/Shift-JIS 存量极常见）。utf-8-sig 优先 + 编码探测回退 | A:WS-16 + B:#27 | 低 | 低 | 10–20 行 |
+| [x] | T19 | `_hf_model_cached` 见 snapshots 非空即强制 `local_files_only`，半截下载把用户锁死离线且报错不指真因 | B:#29 | 低 | 低 | 5–15 行 |
+| [x] | T20 | align 页每次运行冷加载模型（init+register+finally unload），与 pipeline/whisper 页的 acquire 缓存模式不一致，重复打轴极慢 | B:#14b | 低 | 低中 | 10–20 行 |
+| [x] | T21 | vendor `wav_chunk_inference` 内部循环无 checkpoint，DnR 单轨分离数分钟内取消/暂停完全无响应（自研 `_chunk_inference` 反而每块都有） | B:#15b | 低 | 低 | 5–10 行 |
 | [ ] | T22 | MMS（token 后验均值）与 Qwen3（时长比）分数语义不同却共用 `align_conf_threshold=0.5`，阈值对其一无标定意义 | B:#24 | 中※※ | 中 | 10–30 行 |
-| [ ] | T23 | translate 页 `save_state()` 带写盘副作用且 dict 缺 `batch_size`：每次自动保存抹掉手工配置；运行时也不读 batch_size（恒默认 20） | A:P4 + B:#10 | 低 | 低 | 5–15 行 |
+| [x] | T23 | translate 页 `save_state()` 带写盘副作用且 dict 缺 `batch_size`：每次自动保存抹掉手工配置；运行时也不读 batch_size（恒默认 20） | A:P4 + B:#10 | 低 | 低 | 5–15 行 |
 
 ※ T17 风险高在生命周期改动会牵动模型缓存复用逻辑，需按"预处理→识别→对齐"全流程回归。
 ※※ T22 难点不在代码，在 Qwen3 阈值标定，需真实素材验证。
@@ -75,7 +75,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 | [ ] | T24 | TIGER-DnR 三倍浪费：dialog/effect/music 各跑全长推理，流水线只消费 dialog。`save_intermediate=False` 时只跑 dialog → 预处理直接 3 倍提速（最大单点优化） | A:WS-20 + B:#20 | 低中 | 低中 | 10–25 行 |
 | [x] | T25 | espnet + espnet-model-zoo 重依赖只服务被注释掉的 tfgridnet 分支（~70 行死码），装机体积大头 | A:WS-17 + B:#18 | 低 | 低 | 净删 ~70 行 + 2 依赖 |
 | [x] | T26 | TTS 整条线废案（~650 行）：tts.py import 的 `TTS_MODELS`/`load_tts_config` 不存在，一碰即崩；`run_mms_fa` 重复对齐逻辑。移入 archive/ | A:WS-18 + B:#17 | 低 | 低 | 净删 ~650 行 |
-| [ ] | T27 | `parse_srt` 默认 `lang="ja"` 强制算罗马音：翻译路径、ref 解析白白加载 cutlet/MeCab 逐条形态素分析。默认改 `lang=None`，对齐调用方显式传 | A:WS-21 + B:#19 | 低 | 低中 | 10–20 行（需核查全部调用方） |
+| [x] | T27 | `parse_srt` 默认 `lang="ja"` 强制算罗马音：翻译路径、ref 解析白白加载 cutlet/MeCab 逐条形态素分析。默认改 `lang=None`，对齐调用方显式传 | A:WS-21 + B:#19 | 低 | 低中 | 10–20 行（需核查全部调用方） |
 | [ ] | T28 | 同一文件被 ffmpeg 解码 2–3 次；`compute_type` 三处硬编码 int8（CUDA 上 fp16 常更快更准，README 显存表还是 fp16 口径）。int8 参数化易；消重复解码需传递波形或缓存 | A:WS-22 + B(思考流) | 低→中 | 低→中 | 参数化 15–30 行；消重复解码 30–80 行 |
 | [ ] | T29 | 数字被删致对齐系统性偏移：`japanese_to_romaji` 送 cutlet 前删光数字，音频里数字是读出来的（"3人"→只对"人"）。**财经素材满屏数字，疑似日常影响最大的质量项**。让数字进 cutlet 转读音 | B:#23 | 中※ | 中 | 5–15 行 |
 | [ ] | T30 | 存储布局割裂：launcher 设 `WRITANSUB_HOME` 无人读；`CACHE_DIR` 无环境变量覆盖而 MODELS/LOG 有；配置走 platformdirs、模型/缓存/日志走 PROJECT_ROOT；卸载器不清理数 GB 模型残留 | B:#21b（部分 A:WS-19） | 中 | 中※※ | 20–50 行 + 安装器脚本 |

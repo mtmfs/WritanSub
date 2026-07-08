@@ -302,8 +302,8 @@ class AlignmentTab(StateMixin, QWidget):
             pad_sec = pp.pop("pad_sec", 0.5)
 
             if align_model == "qwen3-fa-0.6b":
-                qwen3_model = init_qwen3_model(device)
-                model_handle = reg.register_model("qwen3_fa", qwen3_model, device)
+                model_handle = reg.acquire_model("qwen3_fa", device, lambda: init_qwen3_model(device))
+                qwen3_model = reg.get_model(model_handle)
 
                 aligned = run_qwen3_alignment(
                     waveform, subs, device=device, pad_sec=pad_sec,
@@ -312,8 +312,8 @@ class AlignmentTab(StateMixin, QWidget):
                     log_callback=log_emit,
                 )
             else:
-                model_bundle = init_model(device)
-                model_handle = reg.register_model("mms_fa", model_bundle, device)
+                model_handle = reg.acquire_model("mms_fa", device, lambda: init_model(device))
+                model_bundle = reg.get_model(model_handle)
 
                 aligned = run_alignment(
                     waveform, subs, device=device, pad_sec=pad_sec,
@@ -340,5 +340,5 @@ class AlignmentTab(StateMixin, QWidget):
                 self._log.log(f"详细日志已写入: {path}")
         finally:
             if model_handle is not None:
-                reg.unload_model(model_handle)
+                reg.release_model(model_handle)
             self._signals.finished.emit()

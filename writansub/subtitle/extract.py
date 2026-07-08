@@ -64,8 +64,14 @@ def select_track(tracks: list[dict], lang: str) -> int | None:
         if any(track_lang == c or track_lang.startswith(c) for c in codes):
             return track["index"]
 
-    # 没匹配到语言，回退第一条
-    return tracks[0]["index"]
+    # 没匹配到语言，回退第一条并告警——可能选中 signs/歌词轨导致台词不完整
+    from writansub.logger import log_line
+    t0 = tracks[0]
+    log_line(
+        f"[ref] 未找到语言 {lang!r} 的字幕轨，回退第 {t0['index']} 轨"
+        f" (language={t0['language']!r} title={t0['title']!r})，参考台词可能不完整"
+    )
+    return t0["index"]
 
 
 def extract_subtitle(media: str, track_index: int) -> list[Sub]:

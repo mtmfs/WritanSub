@@ -36,15 +36,25 @@ def _hf_model_cached(cache_dir: str, repo_id: str) -> bool:
     return any(os.scandir(snap_dir))
 
 
+def _from_pretrained_cached(cls: Any, repo_id: str, cache_dir: str, device: str) -> Any:
+    """缓存命中时先离线加载；半截缓存加载失败则降级联网重试，避免把用户锁死在离线模式。"""
+    if _hf_model_cached(cache_dir, repo_id):
+        try:
+            return cls.from_pretrained(
+                repo_id, cache_dir=cache_dir, local_files_only=True,
+            ).to(device).eval()
+        except Exception as e:
+            from writansub.logger import log_line
+            log_line(f"[model] {repo_id} 本地缓存加载失败 ({e!r})，转为联网重试")
+    return cls.from_pretrained(repo_id, cache_dir=cache_dir).to(device).eval()
+
+
 def _load_dnr_model(device: str, cache_dir: str = "") -> Any:
     from writansub.vendor.tiger import TIGERDNR
     from writansub.paths import CACHE_DIR
     cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
-    kwargs: dict[str, Any] = {"cache_dir": cache_dir}
-    if _hf_model_cached(cache_dir, "JusperLee/TIGER-DnR"):
-        kwargs["local_files_only"] = True
-    return TIGERDNR.from_pretrained("JusperLee/TIGER-DnR", **kwargs).to(device).eval()
+    return _from_pretrained_cached(TIGERDNR, "JusperLee/TIGER-DnR", cache_dir, device)
 
 
 def _load_speech_model(device: str, cache_dir: str = "") -> Any:
@@ -52,10 +62,7 @@ def _load_speech_model(device: str, cache_dir: str = "") -> Any:
     from writansub.paths import CACHE_DIR
     cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
-    kwargs: dict[str, Any] = {"cache_dir": cache_dir}
-    if _hf_model_cached(cache_dir, "JusperLee/TIGER-speech"):
-        kwargs["local_files_only"] = True
-    return TIGER.from_pretrained("JusperLee/TIGER-speech", **kwargs).to(device).eval()
+    return _from_pretrained_cached(TIGER, "JusperLee/TIGER-speech", cache_dir, device)
 
 
 def separate_dnr_demucs(

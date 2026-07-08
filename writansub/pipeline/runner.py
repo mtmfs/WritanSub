@@ -31,7 +31,7 @@ class PipelineConfig:
     generate_review: bool = False
     translate: bool = False
     api_base: str = TRANSLATE_DEFAULTS["api_base"]
-    api_key: str = TRANSLATE_DEFAULTS["api_key"]
+    api_key: str = field(default=TRANSLATE_DEFAULTS["api_key"], repr=False)
     llm_model: str = TRANSLATE_DEFAULTS["model"]
     target_lang: str = TRANSLATE_DEFAULTS["target_lang"]
     batch_size: int = TRANSLATE_DEFAULTS["batch_size"]
@@ -130,7 +130,7 @@ def run_pipeline(
 
         external_ref: list | None = None
         if cfg.ref_srt:
-            external_ref = parse_srt(cfg.ref_srt, lang=cfg.lang)
+            external_ref = parse_srt(cfg.ref_srt)
             log(f"使用外部参考字幕: {cfg.ref_srt} ({len(external_ref)} 条)")
 
         for media in cfg.media_files:

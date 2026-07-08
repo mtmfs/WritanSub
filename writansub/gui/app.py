@@ -51,6 +51,8 @@ class MainWindow(QMainWindow):
         state = load_gui_state()
         for tab in self._tabs:
             state.update(tab.save_state())
+        # api_key 只存 writansub_translate.json，不落 gui_state（含清理历史残留）
+        state.pop("translate.api_key", None)
         save_gui_state(state)
 
         from writansub.gui.widgets import ParamSpinBox
