@@ -20,7 +20,7 @@
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
 | [ ] | T01 | 后处理参数全零自锁：transcribe 页 spinbox 缺 `setValue`（`transcribe.py:100`）+ `closeEvent` 用 `findChildren` 全局收集撞 key（`app.py:56-61`）+ 坏值写盘后自锁。**线上配置至今全 0，正在持续劣化对齐与 review** | A:WS-01 + B:#16(半) | 低 | 低 | 20–40 行 |
-| [ ] | T02 | CLI `translate` 缺 `from dataclasses import replace`（`cli.py:416`），默认路径翻译跑完必崩、译文全丢（API 已计费）。引入点：0.1.7.3 的"清理未用导入" | A:WS-02 + B:#1 | 极低 | 无 | 1 行 |
+| [x] | T02 | CLI `translate` 缺 `from dataclasses import replace`（`cli.py:416`），默认路径翻译跑完必崩、译文全丢（API 已计费）。引入点：0.1.7.3 的"清理未用导入" | A:WS-02 + B:#1 | 极低 | 无 | 1 行 |
 | [ ] | T03 | native 层三合一：`wait_process` 持 GIL 全程冻结解释器（GUI 卡死、超时/取消/关窗全失效）+ `shutdown` 写锁死锁 + `Vec<u8>`→`list[int]` 内存灾难（1h 音频峰值 ~2.5GB）。两份报告一致结论：整层负价值，建议纯 Python 替换（dict + `subprocess.run(timeout=...)`） | A:WS-03 + B:#6/#7/#12 | 中 | 中 | bridge.py 改写 60–100 行；删 native/ 113 行 Rust + maturin/版本校验/打包链清理 |
 
 T01 止血步（代码修复前）：删除线上 `writansub_pp.json` 让默认值回归——**属用户机器操作，须单独征得同意后执行**。
@@ -33,7 +33,7 @@ T03 附带收益：修复即顺带消掉 T16（pip 安装断裂）、P4 的 Ctrl
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
 | [ ] | T04 | 输出互相覆盖：whisper SRT 与最终结果都写 `<base>.srt`，`keep_whisper_srt` 无效；流水线开翻译时强制双语（`runner.py:126/274-280`） | A:WS-04 + B:#3 | 低 | 中※ | 15–30 行 + README |
-| [ ] | T05 | Qwen3 + TIGER 组合必崩：`import torchaudio.transforms as T` 只在 MMS 分支内，Qwen3 路径引用 `T.Resample` 抛 UnboundLocalError；TIGER 输出 44100≠16000 使该路径必然触发（`runner.py:179/202`，B 已复现验证） | A:WS-05 + B:#2 | 极低 | 低 | 1–2 行 |
+| [x] | T05 | Qwen3 + TIGER 组合必崩：`import torchaudio.transforms as T` 只在 MMS 分支内，Qwen3 路径引用 `T.Resample` 抛 UnboundLocalError；TIGER 输出 44100≠16000 使该路径必然触发（`runner.py:179/202`，B 已复现验证） | A:WS-05 + B:#2 | 极低 | 低 | 1–2 行 |
 | [ ] | T06 | review 索引体系错位：按原始编号生成 → ref 映射/短字幕合并重编号 → 用新编号回标旧文件，标错行；ASS 侧 `rfind(",,")` 解析脆弱；词全高置信时对齐标注静默丢失。根治 = 内存中标记、索引稳定后一次性生成 | A:WS-06+P4 + B:#4/#5 | 中高 | 中 | 60–120 行（runner.py + review.py 数据流重排） |
 | [ ] | T07 | 翻译中途取消丢弃全部已付费译文：译文攒局部 dict 最后才回写（`translate/core.py:30/83-85`）。改为每批完成即回写 | A:WS-07 | 低 | 低 | 5–10 行 |
 | [ ] | T08 | 翻译完全信任 LLM 回显编号：不校验编号属于当前批次（整批重编号=常见失败模式，译文写错条并覆盖前批）；失败批次无重试只记日志 | B:#25 | 低中 | 低 | 30–50 行 |
@@ -90,15 +90,15 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
-| [ ] | T32 | 多选删除 `reversed(selectedItems())` 不保证行序，非连续多选可能删错（pipeline.py:362、preprocess.py:200）。取 row 降序删 | A:WS-23 | 低 | 低 | 5–10 行 ×2 处 |
-| [ ] | T33 | `load_pp_config` 的 `float()` 只捕 ValueError，JSON null/数组抛 TypeError → GUI 启动即崩 | A:P4 + B:#26 | 极低 | 低 | 1–3 行 |
+| [x] | T32 | 多选删除 `reversed(selectedItems())` 不保证行序，非连续多选可能删错（pipeline.py:362、preprocess.py:200）。取 row 降序删 | A:WS-23 | 低 | 低 | 5–10 行 ×2 处 |
+| [x] | T33 | `load_pp_config` 的 `float()` 只捕 ValueError，JSON null/数组抛 TypeError → GUI 启动即崩 | A:P4 + B:#26 | 极低 | 低 | 1–3 行 |
 | [ ] | T34 | 合并短字幕 `prev.text + sub.text` 无分隔符（拉丁语言产出 "helloworld"）且不看时间距离硬合并 | A:P4 + B:#22 | 低 | 低 | 5–10 行 |
-| [ ] | T35 | 无 N 卡用户每次启动弹驱动警告，无"不再提示"；且未考虑 cu124 用户（525+ 即可）的误报 | A:P4 + B(思考流) | 低 | 低 | 10–15 行 |
+| [x] | T35 | 无 N 卡用户每次启动弹驱动警告，无"不再提示"；且未考虑 cu124 用户（525+ 即可）的误报 | A:P4 + B(思考流) | 低 | 低 | 10–15 行 |
 | [ ] | T36 | GUI 关窗不检查运行中任务，daemon 线程被掐可能留半截 SRT。加确认对话框 | B:#30 | 低 | 低 | 10–20 行 |
-| [ ] | T37 | 字幕提取 `timeout=60` 对大 MKV/机械盘偏紧（decode 600s 同理）。注意：T03 修好前超时本来就不生效，改值应在 T03 之后 | B:#30 | 极低 | 低 | 1–3 行 |
-| [ ] | T38 | `WritanSubCLI.bat` 无条件 `pause`，妨碍脚本化调用 | B:#30 | 极低 | 低 | 1–3 行 |
-| [ ] | T39 | `ResourceRegistry.instance()` 单例创建无锁 | B:#30 | 极低 | 低 | 3–5 行 |
-| [ ] | T40 | transcribe 无 CUDA 不可用回退（align 有），风格不一致 | A:P4 | 低 | 低 | 5–10 行 |
+| [~] | T37 | 字幕提取 `timeout=60` 对大 MKV/机械盘偏紧（decode 600s 同理）。注意：T03 修好前超时本来就不生效，改值应在 T03 之后 | B:#30 | 极低 | 低 | 1–3 行 |
+| [x] | T38 | `WritanSubCLI.bat` 无条件 `pause`，妨碍脚本化调用 | B:#30 | 极低 | 低 | 1–3 行 |
+| [x] | T39 | `ResourceRegistry.instance()` 单例创建无锁 | B:#30 | 极低 | 低 | 3–5 行 |
+| [x] | T40 | transcribe 无 CUDA 不可用回退（align 有），风格不一致 | A:P4 | 低 | 低 | 5–10 行 |
 
 ---
 

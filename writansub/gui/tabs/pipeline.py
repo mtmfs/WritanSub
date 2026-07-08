@@ -358,8 +358,8 @@ class PipelineTab(StateMixin, QWidget):
                 self._file_list.addItem(os.path.basename(p))
 
     def _remove_files(self):
-        for item in reversed(self._file_list.selectedItems()):
-            row = self._file_list.row(item)
+        rows = sorted((self._file_list.row(it) for it in self._file_list.selectedItems()), reverse=True)
+        for row in rows:
             self._file_list.takeItem(row)
             del self._media_files[row]
 

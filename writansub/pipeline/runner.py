@@ -166,13 +166,14 @@ def run_pipeline(
         label = "Qwen3 对齐" if use_qwen3 else "MMS 对齐"
         log(f">>> Phase {a_phase}/{num_phases}: {label}")
 
+        import torchaudio.transforms as T
+
         if use_qwen3:
             from writansub.align.core import init_qwen3_model, run_qwen3_alignment
             mh = reg.acquire_model("qwen3_fa", cfg.device, lambda: init_qwen3_model(cfg.device))
             qwen3_model = reg.get_model(mh)
             mms_bundle = None
         else:
-            import torchaudio.transforms as T
             from torchaudio.pipelines import MMS_FA as _mms_bundle
             mh = reg.acquire_model("mms_fa", cfg.device, lambda: init_model(cfg.device))
             mms_bundle = reg.get_model(mh)

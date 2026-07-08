@@ -33,7 +33,7 @@ def probe_subtitle_tracks(media: str) -> list[dict]:
         media,
     ]
     reg = ResourceRegistry.instance()
-    proc = reg.run_subprocess(cmd, timeout=30)
+    proc = reg.run_subprocess(cmd, timeout=120)
     if proc.returncode != 0:
         return []
 
@@ -82,7 +82,7 @@ def extract_subtitle(media: str, track_index: int) -> list[Sub]:
         "-",
     ]
     reg = ResourceRegistry.instance()
-    proc = reg.run_subprocess(cmd, timeout=60)
+    proc = reg.run_subprocess(cmd, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(
             f"ffmpeg 字幕提取失败: {proc.stderr.decode(errors='replace')}"

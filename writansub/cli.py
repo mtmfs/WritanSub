@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import sys
+from dataclasses import replace
 
 from writansub import __version__
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS

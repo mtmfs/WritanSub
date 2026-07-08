@@ -72,7 +72,7 @@ def load_pp_config() -> dict[str, float]:
     raw = _load_json(PP_CONFIG_PATH)
     try:
         return {k: float(raw.get(k, v)) for k, v in PP_DEFAULTS.items()}
-    except ValueError:
+    except (ValueError, TypeError):
         return dict(PP_DEFAULTS)
 
 

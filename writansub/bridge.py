@@ -67,11 +67,14 @@ def _get_ffprobe() -> str:
 
 class ResourceRegistry:
     _instance: "ResourceRegistry | None" = None
+    _instance_lock = threading.Lock()
 
     @classmethod
     def instance(cls) -> "ResourceRegistry":
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._instance_lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     def __init__(self) -> None:
@@ -212,7 +215,7 @@ class ResourceRegistry:
             "-f", "s16le", "-ac", "1", "-ar", str(sample_rate),
             "-loglevel", "error", "-",
         ]
-        proc = self.run_subprocess(cmd, timeout=600)
+        proc = self.run_subprocess(cmd, timeout=3600)
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg 解码失败: {proc.stderr.decode(errors='replace')}")
 

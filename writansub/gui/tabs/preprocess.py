@@ -198,8 +198,8 @@ class TigerTab(StateMixin, QWidget):
         self._auto_save()
 
     def _remove_files(self):
-        for item in reversed(self._file_list.selectedItems()):
-            row = self._file_list.row(item)
+        rows = sorted((self._file_list.row(it) for it in self._file_list.selectedItems()), reverse=True)
+        for row in rows:
             self._file_list.takeItem(row)
             self._media_files.pop(row)
         self._auto_save()

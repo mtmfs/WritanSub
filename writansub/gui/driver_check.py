@@ -31,22 +31,38 @@ def _parse_major(version: str) -> int | None:
         return None
 
 
-def _show_warning(title: str, text: str) -> None:
+def _show_warning(title: str, text: str) -> bool:
+    """显示警告框。返回 True 表示用户选择了「不再提示」。"""
     if sys.platform != "win32":
         print(f"{title}: {text}", file=sys.stderr)
-        return
+        return False
     try:
         import ctypes
 
-        ctypes.windll.user32.MessageBoxW(0, text, title, 0x30)
+        text += "\n\n点击「是」以后不再显示此提示,点击「否」下次启动仍提醒。"
+        # MB_YESNO | MB_ICONWARNING
+        ret = ctypes.windll.user32.MessageBoxW(0, text, title, 0x34)
+        return ret == 6  # IDYES
     except Exception:
         print(f"{title}: {text}", file=sys.stderr)
+        return False
 
 
 def check_driver(min_major: int = MIN_DRIVER_MAJOR) -> None:
+    from writansub.config import load_gui_state, save_gui_state
+
+    state = load_gui_state()
+    if state.get("skip_driver_warning"):
+        return
+
+    def _warn(title: str, text: str) -> None:
+        if _show_warning(title, text):
+            state["skip_driver_warning"] = True
+            save_gui_state(state)
+
     version = _query_driver_version()
     if version is None:
-        _show_warning(
+        _warn(
             "WritanSub - 未检测到 NVIDIA 驱动",
             "未能通过 nvidia-smi 读取驱动版本。\n\n"
             "WritanSub 需要 NVIDIA 显卡与驱动才能运行 CUDA 加速。\n"
@@ -56,7 +72,7 @@ def check_driver(min_major: int = MIN_DRIVER_MAJOR) -> None:
 
     major = _parse_major(version)
     if major is not None and major < min_major:
-        _show_warning(
+        _warn(
             "WritanSub - 驱动版本过低",
             f"检测到 NVIDIA 驱动版本:{version}\n"
             f"本版本 WritanSub 基于 CUDA 12.8,需要驱动版本 ≥ {min_major}.x。\n\n"

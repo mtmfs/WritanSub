@@ -29,4 +29,8 @@ echo [WritanSub-CLI] launching via system python on PATH
 python -m writansub.cli %*
 
 :end
-pause
+if errorlevel 1 (
+    echo.
+    echo [WritanSub-CLI] exited with errorlevel %errorlevel%
+    pause
+)
