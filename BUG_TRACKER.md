@@ -19,11 +19,11 @@
 
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
-| [ ] | T01 | 后处理参数全零自锁：transcribe 页 spinbox 缺 `setValue`（`transcribe.py:100`）+ `closeEvent` 用 `findChildren` 全局收集撞 key（`app.py:56-61`）+ 坏值写盘后自锁。**线上配置至今全 0，正在持续劣化对齐与 review** | A:WS-01 + B:#16(半) | 低 | 低 | 20–40 行 |
+| [~] | T01 | 后处理参数全零自锁：transcribe 页 spinbox 缺 `setValue`（`transcribe.py:100`）+ `closeEvent` 用 `findChildren` 全局收集撞 key（`app.py:56-61`）+ 坏值写盘后自锁。**线上配置至今全 0，正在持续劣化对齐与 review** | A:WS-01 + B:#16(半) | 低 | 低 | 20–40 行 |
 | [x] | T02 | CLI `translate` 缺 `from dataclasses import replace`（`cli.py:416`），默认路径翻译跑完必崩、译文全丢（API 已计费）。引入点：0.1.7.3 的"清理未用导入" | A:WS-02 + B:#1 | 极低 | 无 | 1 行 |
 | [ ] | T03 | native 层三合一：`wait_process` 持 GIL 全程冻结解释器（GUI 卡死、超时/取消/关窗全失效）+ `shutdown` 写锁死锁 + `Vec<u8>`→`list[int]` 内存灾难（1h 音频峰值 ~2.5GB）。两份报告一致结论：整层负价值，建议纯 Python 替换（dict + `subprocess.run(timeout=...)`） | A:WS-03 + B:#6/#7/#12 | 中 | 中 | bridge.py 改写 60–100 行；删 native/ 113 行 Rust + maturin/版本校验/打包链清理 |
 
-T01 止血步（代码修复前）：删除线上 `writansub_pp.json` 让默认值回归——**属用户机器操作，须单独征得同意后执行**。
+T01 止血步：✅ 2026-07-09 已执行（删除线上全 0 配置 + transcribe 页 spinbox 补 setValue 先遣行，离屏 GUI 开关一轮验证默认值回归且不再被冲掉）。T01 主修（closeEvent 命名空间化）仍待批次 2。
 T03 附带收益：修复即顺带消掉 T16（pip 安装断裂）、P4 的 Ctrl+C 孤儿 ffmpeg、超时不生效（T37 的前置）。风险集中在打包链（Inno/launcher/`check_versions.ps1` 都要同步改），Python 侧爆炸半径已确认仅 bridge.py 一个文件。
 
 ---
