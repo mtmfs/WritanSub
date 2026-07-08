@@ -13,6 +13,9 @@ resolution-markers = [
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
+[manifest]
+build-constraints = [{ name = "hatchling", specifier = "<1.31" }]
+
 [[package]]
 name = "accelerate"
 version = "1.12.0"
