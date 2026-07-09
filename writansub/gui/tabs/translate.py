@@ -160,7 +160,8 @@ class TranslateTab(StateMixin, QWidget):
             "api_key": self._key_edit.text(),
             "model": self._model_edit.text(),
             # UI 无 batch_size 控件，保留配置文件里的手工值，避免整体覆写时被抹掉
-            "batch_size": load_translate_config().get("batch_size", 20),
+            # （load_translate_config 已合并默认表，键必存在）
+            "batch_size": load_translate_config()["batch_size"],
         }
 
     def save_state(self) -> dict:
@@ -280,7 +281,7 @@ class TranslateTab(StateMixin, QWidget):
                 api_base=cfg["api_base"],
                 api_key=cfg["api_key"],
                 model=cfg["model"],
-                batch_size=cfg.get("batch_size", 20),
+                batch_size=cfg["batch_size"],
                 log_callback=log_emit,
                 progress_callback=self._progress.update_progress,
             )

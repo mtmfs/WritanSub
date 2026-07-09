@@ -27,6 +27,18 @@ class StateMixin:
         self._save_now()
 
 
+def remove_selected_rows(file_list, backing_list) -> None:
+    """按行号降序删除 QListWidget 选中行，并同步删除后备列表对应项。
+
+    必须先取行号排序再删：selectedItems() 的顺序不保证与行序一致，
+    非连续多选时按 item 顺序删会因行号变动而删错行。
+    """
+    rows = sorted((file_list.row(it) for it in file_list.selectedItems()), reverse=True)
+    for row in rows:
+        file_list.takeItem(row)
+        del backing_list[row]
+
+
 
 class _NoScrollMixin:
 

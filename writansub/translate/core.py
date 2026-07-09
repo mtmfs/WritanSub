@@ -3,6 +3,9 @@ from typing import Callable
 
 from writansub.types import Sub
 
+# 每批送翻条数的唯一定义点；config.TRANSLATE_DEFAULTS / CLI / runner 均由此取值
+DEFAULT_BATCH_SIZE = 20
+
 
 def translate_subs(
     subs: list[Sub],
@@ -10,7 +13,7 @@ def translate_subs(
     api_base: str,
     api_key: str,
     model: str,
-    batch_size: int = 20,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> list[Sub]:

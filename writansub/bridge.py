@@ -77,11 +77,11 @@ class ResourceRegistry:
 
     @classmethod
     def instance(cls) -> "ResourceRegistry":
-        if cls._instance is None:
-            with cls._instance_lock:
-                if cls._instance is None:
-                    cls._instance = cls()
-        return cls._instance
+        # 每任务仅调用数次，非热路径：无条件加锁，不做双检快路径
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = cls()
+            return cls._instance
 
     def __init__(self) -> None:
         # 使用底层原生 Registry 类（类级 API，非实例）

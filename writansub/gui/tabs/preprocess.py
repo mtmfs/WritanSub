@@ -11,7 +11,7 @@ from PySide6.QtCore import Signal, QObject, Qt
 from writansub.types import MEDIA_FILETYPES, MSS_MODELS, SS_MODELS
 from writansub.config import load_gui_state
 from writansub.bridge import ResourceRegistry, CancelledError
-from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, StateMixin
+from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, StateMixin, remove_selected_rows
 
 
 class _TigerSignals(QObject):
@@ -198,10 +198,7 @@ class TigerTab(StateMixin, QWidget):
         self._auto_save()
 
     def _remove_files(self):
-        rows = sorted((self._file_list.row(it) for it in self._file_list.selectedItems()), reverse=True)
-        for row in rows:
-            self._file_list.takeItem(row)
-            self._media_files.pop(row)
+        remove_selected_rows(self._file_list, self._media_files)
         self._auto_save()
 
     def _clear_files(self):

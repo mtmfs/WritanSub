@@ -13,7 +13,7 @@ from writansub.config import load_gui_state, load_translate_config
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import (
     LogWidget, ProgressWidget, build_params_grid,
-    NoScrollComboBox, GroupedComboBox, StateMixin,
+    NoScrollComboBox, GroupedComboBox, StateMixin, remove_selected_rows,
 )
 
 
@@ -358,10 +358,7 @@ class PipelineTab(StateMixin, QWidget):
                 self._file_list.addItem(os.path.basename(p))
 
     def _remove_files(self):
-        rows = sorted((self._file_list.row(it) for it in self._file_list.selectedItems()), reverse=True)
-        for row in rows:
-            self._file_list.takeItem(row)
-            del self._media_files[row]
+        remove_selected_rows(self._file_list, self._media_files)
 
     def _clear_files(self):
         self._file_list.clear()

@@ -3,6 +3,7 @@ import os
 from typing import Any
 
 from writansub.paths import PP_CONFIG_PATH, TRANSLATE_CONFIG_PATH, GUI_STATE_PATH
+from writansub.translate.core import DEFAULT_BATCH_SIZE
 
 PP_DEFAULTS: dict[str, float] = {
     "extend_end": 0.30,
@@ -85,7 +86,7 @@ TRANSLATE_DEFAULTS: dict[str, Any] = {
     "api_key": "no-key",
     "model": "deepseek-chat",
     "target_lang": "简体中文",
-    "batch_size": 20,
+    "batch_size": DEFAULT_BATCH_SIZE,
 }
 
 
