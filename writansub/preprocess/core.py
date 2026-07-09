@@ -37,16 +37,22 @@ def _hf_model_cached(cache_dir: str, repo_id: str) -> bool:
 
 
 def _from_pretrained_cached(cls: Any, repo_id: str, cache_dir: str, device: str) -> Any:
-    """缓存命中时先离线加载；半截缓存加载失败则降级联网重试，避免把用户锁死在离线模式。"""
+    """缓存命中时先离线加载；半截缓存加载失败则降级联网重试，避免把用户锁死在离线模式。
+
+    .to(device) 保持在 try 之外：显存不足/驱动错误应原样抛出，而不是被误诊为缓存损坏。
+    """
+    model = None
     if _hf_model_cached(cache_dir, repo_id):
         try:
-            return cls.from_pretrained(
+            model = cls.from_pretrained(
                 repo_id, cache_dir=cache_dir, local_files_only=True,
-            ).to(device).eval()
+            )
         except Exception as e:
             from writansub.logger import log_line
             log_line(f"[model] {repo_id} 本地缓存加载失败 ({e!r})，转为联网重试")
-    return cls.from_pretrained(repo_id, cache_dir=cache_dir).to(device).eval()
+    if model is None:
+        model = cls.from_pretrained(repo_id, cache_dir=cache_dir)
+    return model.to(device).eval()
 
 
 def _load_dnr_model(device: str, cache_dir: str = "") -> Any:

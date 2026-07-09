@@ -30,7 +30,9 @@ def _candidate_encodings(path: str) -> list[str]:
             candidates.append(best.encoding)
     except Exception:
         pass
-    for enc in ("gbk", "shift_jis"):
+    # shift_jis 在前：GBK 能"成功"解码绝大多数 Shift-JIS 字节流（产出乱码），
+    # 反向误配的概率低得多；本项目主要场景是日文字幕
+    for enc in ("shift_jis", "gbk"):
         if enc not in candidates:
             candidates.append(enc)
     return candidates
@@ -45,7 +47,7 @@ def parse_srt(path: str, lang: str | None = None) -> list[Sub]:
             return _subs_from_pysrt(pysrt.open(path, encoding=enc), lang)
         except (UnicodeDecodeError, LookupError) as e:
             last_err = e
-    raise ValueError(f"无法解码字幕文件 {path}: 不是 utf-8/gbk/shift_jis 等已知编码") from last_err
+    raise ValueError(f"无法解码字幕文件 {path}: 不是 utf-8/shift_jis/gbk 等已知编码") from last_err
 
 
 def parse_srt_string(text: str, lang: str | None = None) -> list[Sub]:

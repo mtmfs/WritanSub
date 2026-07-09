@@ -27,10 +27,6 @@ def transcribe(
 
     if model is None:
         _progress(0.0, "加载模型...")
-        import torch
-        if device == "cuda" and not torch.cuda.is_available():
-            _log("CUDA 不可用，回退到 CPU")
-            device = "cpu"
         from faster_whisper import WhisperModel
         model = WhisperModel(model_size, device=device, compute_type="int8")
     else:

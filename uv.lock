@@ -2906,6 +2906,7 @@ name = "writansub"
 version = "0.1.7.3"
 source = { editable = "." }
 dependencies = [
+    { name = "charset-normalizer" },
     { name = "cutlet" },
     { name = "demucs" },
     { name = "faster-whisper" },
@@ -2927,6 +2928,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "charset-normalizer", specifier = ">=3.0" },
     { name = "cutlet" },
     { name = "demucs" },
     { name = "faster-whisper" },
