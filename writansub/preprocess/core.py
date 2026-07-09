@@ -131,9 +131,12 @@ def separate_dnr(
     sr: int,
     device: str = "cpu",
     cache_dir: str = "",
+    full_tracks: bool = True,
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    """TIGER-DnR 分离。full_tracks=False 时只跑人声子模型（流水线只消费人声，
+    跳过音效/伴奏两遍全长推理约 3 倍提速），effects/music 返回 None。"""
     _log = log_callback or (lambda msg: None)
     _progress = progress_callback or (lambda pct, msg: None)
 
@@ -151,25 +154,24 @@ def separate_dnr(
     model = reg.get_model(h)
 
     # 每条轨道：(子模型, 显示名称, wav_chunk_inference 输出索引)
-    tracks = [
-        (model.dialog, "人声", 2),
-        (model.effect, "音效", 1),
-        (model.music,  "伴奏", 0),
-    ]
+    tracks = [(model.dialog, "人声", 2)]
+    if full_tracks:
+        tracks += [(model.effect, "音效", 1), (model.music, "伴奏", 0)]
 
     mixture = waveform.unsqueeze(0).to(device)  # [1, 1, T]
     results = []
     try:
         for i, (sub_model, name, idx) in enumerate(tracks):
             reg.checkpoint()
-            _log(f"正在分离 {name} ({i + 1}/3) ...")
-            _progress(i / 3.0, f"正在分离 {name}...")
+            _log(f"正在分离 {name} ({i + 1}/{len(tracks)}) ...")
+            _progress(i / len(tracks), f"正在分离 {name}...")
             track = model.wav_chunk_inference(sub_model, mixture)[idx]
             results.append(track.cpu())
     finally:
         reg.release_model(h)
 
-    dialog, effects, music = results
+    dialog = results[0]
+    effects, music = (results[1], results[2]) if full_tracks else (None, None)
     return dialog, effects, music
 
 
@@ -368,6 +370,7 @@ def run_dnr_batch(
         else:
             dialog, effects, music = separate_dnr(
                 waveform, sr, device=device, cache_dir=cache_dir,
+                full_tracks=save_intermediate,
                 log_callback=_log, progress_callback=_sub_progress,
             )
 

@@ -74,7 +74,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
-| [ ] | T24 | TIGER-DnR 三倍浪费：dialog/effect/music 各跑全长推理，流水线只消费 dialog。`save_intermediate=False` 时只跑 dialog → 预处理直接 3 倍提速（最大单点优化） | A:WS-20 + B:#20 | 低中 | 低中 | 10–25 行 |
+| [x] | T24 | TIGER-DnR 三倍浪费：dialog/effect/music 各跑全长推理，流水线只消费 dialog。`save_intermediate=False` 时只跑 dialog → 预处理直接 3 倍提速（最大单点优化）。2026-07-09 修复：`separate_dnr` 按 `full_tracks` 裁剪子模型循环（浪费在 Python 层三次全长推理，vendor 未动）；实测单轨产物与三轨版逐字节全等 | A:WS-20 + B:#20 | 低中 | 低中 | 10–25 行 |
 | [x] | T25 | espnet + espnet-model-zoo 重依赖只服务被注释掉的 tfgridnet 分支（~70 行死码），装机体积大头 | A:WS-17 + B:#18 | 低 | 低 | 净删 ~70 行 + 2 依赖 |
 | [x] | T26 | TTS 整条线废案（~650 行）：tts.py import 的 `TTS_MODELS`/`load_tts_config` 不存在，一碰即崩；`run_mms_fa` 重复对齐逻辑。移入 archive/ | A:WS-18 + B:#17 | 低 | 低 | 净删 ~650 行 |
 | [x] | T27 | `parse_srt` 默认 `lang="ja"` 强制算罗马音：翻译路径、ref 解析白白加载 cutlet/MeCab 逐条形态素分析。默认改 `lang=None`，对齐调用方显式传 | A:WS-21 + B:#19 | 低 | 低中 | 10–20 行（需核查全部调用方） |
