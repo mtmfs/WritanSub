@@ -4,7 +4,7 @@ import sys
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
 
-from writansub.config import load_gui_state, save_gui_state, save_pp_config
+from writansub.config import load_gui_state, save_gui_state
 from writansub.gui.tabs.align import AlignmentTab
 from writansub.gui.tabs.pipeline import PipelineTab
 from writansub.gui.tabs.preprocess import TigerTab
@@ -55,12 +55,9 @@ class MainWindow(QMainWindow):
         state.pop("translate.api_key", None)
         save_gui_state(state)
 
-        from writansub.gui.widgets import ParamSpinBox
-        pp = {}
-        for spin in self.findChildren(ParamSpinBox):
-            pp[spin._key] = round(spin.value(), 2)
-        if pp:
-            save_pp_config(pp)
+        # 后处理参数不在关窗时收集：全局 findChildren 会让不同 tab 的同名
+        # spinbox 撞 key 互相覆盖（T01 全零自锁根因）。参数改为编辑即存，
+        # 见 widgets.bind_pp_autosave。
 
         super().closeEvent(event)
 

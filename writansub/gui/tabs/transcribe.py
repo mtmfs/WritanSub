@@ -14,7 +14,7 @@ from writansub.subtitle.review import generate_review, write_review_files
 from writansub.subtitle.srt_io import write_srt
 from writansub.config import PARAM_DEFS, load_gui_state, load_pp_config
 from writansub.bridge import ResourceRegistry, CancelledError
-from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin
+from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin, bind_pp_autosave
 
 
 class _WhisperSignals(QObject):
@@ -102,6 +102,7 @@ class WhisperTab(StateMixin, QWidget):
         self._wc_spin.setSingleStep(wc_def["inc"])
         self._wc_spin.setDecimals(2)
         self._wc_spin.setValue(load_pp_config()["word_conf_threshold"])
+        bind_pp_autosave(self._wc_spin)
         param_layout.addWidget(self._wc_spin)
 
         self._chk_cond_prev = QCheckBox("上文关联")

@@ -240,6 +240,22 @@ class ParamSpinBox(_NoScrollMixin, QDoubleSpinBox):
         super().__init__(parent)
 
 
+def bind_pp_autosave(spin: ParamSpinBox) -> None:
+    """编辑即单键合并写盘（T01 根修）。
+
+    多页同键 spinbox 是同一份后处理配置的多个视图，最后编辑者赢；
+    未触碰的 spinbox 永不写盘，未初始化值在机制上进不了配置文件。
+    keyboardTracking 关闭后 valueChanged 只在箭头点击/回车/失焦时触发，
+    键入中间态（如输 0.35 过程中的 0）不会落盘。
+    必须在初始 setValue 之后调用，否则播种值会触发一次写盘。
+    """
+    spin.setKeyboardTracking(False)
+    spin.valueChanged.connect(
+        lambda _v, s=spin: save_pp_config(
+            load_pp_config() | {s._key: round(s.value(), 2)})
+    )
+
+
 
 def build_params_grid(
     parent: QWidget,
@@ -272,6 +288,7 @@ def build_params_grid(
         spin.setDecimals(2)
         spin.setValue(cfg.get(key, PP_DEFAULTS[key]))
         spin.setFixedWidth(80)
+        bind_pp_autosave(spin)
         layout.addWidget(spin, row, col + 1)
 
         spinboxes[key] = spin
