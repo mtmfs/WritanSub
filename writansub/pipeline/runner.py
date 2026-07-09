@@ -6,7 +6,7 @@ from typing import Any, Callable
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
 from writansub.subtitle.srt_io import parse_srt, write_srt, populate_romaji, merge_bilingual, stage_path, lang_code
-from writansub.subtitle.review import generate_review, write_review_files, mark_low_align_in_review
+from writansub.subtitle.review import attach_low_words, generate_review_final, write_review_files
 from writansub.transcribe.core import transcribe
 from writansub.translate.core import translate_subs
 from writansub.align.core import load_audio, run_alignment, post_process, init_model
@@ -25,6 +25,7 @@ class PipelineConfig:
     tiger_mode: str | None = None       # None | "denoise" | "separate"
     mss_model: str = "tiger-dnr"
     ss_model: str = "tiger-speech"
+    overlap_mode: str = "merge"         # separate 模式重叠: merge=压成一句 / keep=保留双条
     save_intermediate: bool = False
     keep_whisper_srt: bool = False
     keep_aligned_srt: bool = False
@@ -116,9 +117,10 @@ def run_pipeline(
 
             base = os.path.splitext(media)[0]
             if cfg.generate_review and cfg.word_conf_threshold > 0:
-                srt_c, ass_c, low_c, tot_w = generate_review(subs, word_data, cfg.word_conf_threshold)
-                if low_c > 0:
-                    write_review_files(base, srt_c, ass_c)
+                # T06: 只把低置信词记到 Sub 上随流程携带，review 文件在索引稳定后统一生成
+                low_c, tot_w = attach_low_words(subs, word_data, cfg.word_conf_threshold)
+                if tot_w:
+                    log(f"[Whisper {idx}/{total}] 低置信词 {low_c}/{tot_w}")
             if cfg.keep_whisper_srt:
                 write_srt(subs, stage_path(base, "original", "whisper-" + cfg.whisper_model))
     finally:
@@ -218,7 +220,7 @@ def run_pipeline(
                         log_callback=log,
                     )
 
-                final = post_process(aligned, **pp)
+                final = post_process(aligned, overlap_mode=cfg.overlap_mode, **pp)
                 aligned_results[media] = final
                 if final:
                     avg = sum(s.score for s in final) / len(final)
@@ -228,10 +230,6 @@ def run_pipeline(
                     log(f"[对齐 {idx}/{total}] 结果为空")
 
                 base = os.path.splitext(media)[0]
-                if cfg.generate_review and cfg.align_conf_threshold > 0:
-                    low_a = {s.index for s in final if s.score < cfg.align_conf_threshold}
-                    if low_a:
-                        mark_low_align_in_review(base, low_a)
                 if cfg.keep_aligned_srt:
                     write_srt(final, stage_path(base, "aligned", cfg.align_model))
         finally:
@@ -241,12 +239,27 @@ def run_pipeline(
     if skip_align and sub_results and not _cancelled():
         log("参考字幕直接模式: 跳过强制对齐")
         for media, subs in sub_results.items():
-            aligned_results[media] = post_process(subs, **pp)
+            aligned_results[media] = post_process(subs, overlap_mode=cfg.overlap_mode, **pp)
 
     # 源语终稿恒写 <base>.srt（先于翻译阶段落盘，翻译中途取消也不丢日文轴）
+    # review 同点生成：此时索引已全程稳定，词级+行级标注一次写盘（T06）
     if aligned_results and not _cancelled():
         for media, subs in aligned_results.items():
-            write_srt(subs, os.path.splitext(media)[0] + ".srt")
+            base = os.path.splitext(media)[0]
+            write_srt(subs, base + ".srt")
+            if cfg.generate_review:
+                thr = cfg.align_conf_threshold if not skip_align else 0.0
+                srt_c, ass_c, n_words, n_lines = generate_review_final(subs, thr)
+                if n_words or n_lines:
+                    write_review_files(base, srt_c, ass_c)
+                    log(f"[Review] {os.path.basename(base)}: 低置信词 {n_words}, 低置信行 {n_lines}")
+                else:
+                    # 本轮无任何标记：清掉旧 review 残留，防止陈旧文件误导校对
+                    for ext in ("_review.srt", "_review.ass"):
+                        try:
+                            os.remove(base + ext)
+                        except OSError:
+                            pass
 
     # 翻译终稿另写 <base>_<lang>.srt，与源语终稿并存
     if cfg.translate and aligned_results and not _cancelled():
@@ -395,12 +408,14 @@ def _whisper_with_overlap(
         condition_on_previous_text=cfg.condition_on_prev,
         model=whisper_model,
         cancelled=_cancelled,
+        vad_filter=cfg.vad_filter,
         initial_prompt=cfg.initial_prompt,
     )
     if not overlap_regions:
         return full_subs, full_word_data
 
-    overlap_subs = []
+    # (Sub, word_data) 成对携带过丢弃/排序/重编号——separate 模式的词级 review 由此存活
+    overlap_pairs: list[tuple] = []
     spk1_wav, spk2_wav = separated_tracks
 
     for region in overlap_regions:
@@ -409,7 +424,7 @@ def _whisper_with_overlap(
         start = int(region.start * spk_sr)
         end = int(region.end * spk_sr)
 
-        for spk_wav in [spk1_wav, spk2_wav]:
+        for spk_no, spk_wav in enumerate((spk1_wav, spk2_wav), 1):
             chunk = spk_wav[:, start:end]
             if chunk.shape[1] < 1600:
                 continue
@@ -418,7 +433,8 @@ def _whisper_with_overlap(
                 tmp_path = f.name
             try:
                 save_wav(chunk, tmp_path, spk_sr)
-                local_subs, _ = transcribe(
+                # 区域片段极短，故意不开 VAD：误判会把整段吞掉
+                local_subs, local_words = transcribe(
                     tmp_path, lang=cfg.lang, device=cfg.device,
                     condition_on_previous_text=False, model=whisper_model,
                     initial_prompt=cfg.initial_prompt,
@@ -426,7 +442,8 @@ def _whisper_with_overlap(
                 for s in local_subs:
                     s.start += region.start
                     s.end += region.start
-                overlap_subs.extend(local_subs)
+                    s.speaker = spk_no
+                overlap_pairs.extend(zip(local_subs, local_words))
             finally:
                 try:
                     os.unlink(tmp_path)
@@ -438,9 +455,13 @@ def _whisper_with_overlap(
         if any(max(r.start, sub.start) < min(r.end, sub.end) for r in overlap_regions):
             commented.add(i)
 
-    active = [s for i, s in enumerate(full_subs) if i not in commented] + overlap_subs
-    active.sort(key=lambda s: s.start)
-    for i, s in enumerate(active, 1):
+    pairs = [(s, w) for i, (s, w) in enumerate(zip(full_subs, full_word_data))
+             if i not in commented]
+    pairs += overlap_pairs
+    pairs.sort(key=lambda p: p[0].start)
+    subs = [p[0] for p in pairs]
+    word_data = [p[1] for p in pairs]
+    for i, s in enumerate(subs, 1):
         s.index = i
 
-    return active, [[] for _ in active]
+    return subs, word_data

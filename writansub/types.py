@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 MEDIA_FILETYPES = [
@@ -77,6 +77,10 @@ class Sub:
     romaji: str = ""      # 罗马音（用于 alignment）
     score: float = 0.0
     translated: str = ""
+    # 低置信词随本体携带：重编号/合并等索引变换后仍可在流程末尾单点生成 review（T06）
+    low_words: list[str] = field(default_factory=list)
+    # 说话人标签：0=无（单轨/未知），1/2=separate 模式的两条分离轨（T10）
+    speaker: int = 0
 
 
 def fmt_srt_time(seconds: float) -> str:

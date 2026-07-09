@@ -254,12 +254,11 @@ def run_alignment(
 
         if result is not None:
             aligned_start, aligned_end, avg_score = result
-            results.append(Sub(
-                index=sub.index,
+            # replace 而非重建 Sub：low_words/speaker 等携带字段必须原样保留
+            results.append(replace(
+                sub,
                 start=aligned_start + win_start,
                 end=aligned_end + win_start,
-                text=sub.text,
-                romaji=sub.romaji,
                 score=avg_score,
             ))
             success += 1
@@ -294,6 +293,59 @@ def run_qwen3_alignment(
     )
 
 
+def _combine_overlap_group(group: list[Sub]) -> Sub | None:
+    """把一组跨说话人重叠 cue 压成一条：时间取并集，按先开口顺序
+    每个说话人一行 "- 台词"（同说话人内部顺序直拼），score 取 min 保守标注。"""
+    by_spk: dict[int, list[Sub]] = {}
+    for s in group:
+        by_spk.setdefault(s.speaker, []).append(s)
+
+    parts = []
+    for _spk, items in sorted(by_spk.items(), key=lambda kv: min(x.start for x in kv[1])):
+        text = "".join(x.text for x in items).strip()
+        # 去重：TIGER 分离串扰常使两轨听写出同一句，相同文本只留一份
+        if text and text not in parts:
+            parts.append(text)
+    if not parts:
+        return None
+
+    text = parts[0] if len(parts) == 1 else "\n".join(f"- {p}" for p in parts)
+    return Sub(
+        index=group[0].index,
+        start=min(s.start for s in group),
+        end=max(s.end for s in group),
+        text=text,
+        score=min(s.score for s in group),
+        low_words=[w for s in group for w in s.low_words],
+        speaker=0,
+    )
+
+
+def _merge_speaker_overlaps(out: list[Sub]) -> list[Sub]:
+    """overlap_mode="merge"：跨说话人时间重叠的 cue 传递性成组后压成单条。
+    组内不足两个说话人（含同说话人自身重叠）原样保留。输入须已按 start 排序。"""
+    result: list[Sub] = []
+    i = 0
+    n = len(out)
+    while i < n:
+        group = [out[i]]
+        group_end = out[i].end
+        j = i + 1
+        while j < n and out[j].start < group_end:
+            group.append(out[j])
+            group_end = max(group_end, out[j].end)
+            j += 1
+        speakers = {s.speaker for s in group if s.speaker}
+        if len(group) == 1 or len(speakers) < 2:
+            result.extend(group)
+        else:
+            merged = _combine_overlap_group(group)
+            if merged is not None:
+                result.append(merged)
+        i = j
+    return result
+
+
 def post_process(
     subs: list[Sub],
     extend_end: float = 0.30,
@@ -301,21 +353,32 @@ def post_process(
     gap_threshold: float = 0.50,
     min_gap: float = 0.30,
     min_duration: float = 0.30,
+    overlap_mode: str = "merge",
 ) -> list[Sub]:
     """
     打轴后处理:
-    1. 前端向前延伸 extend_start
-    2. 后端向后延伸 extend_end
+    1. separate 模式跨说话人重叠: merge=压成一句 "- A / - B"（默认），keep=保留双条重叠
+    2. 前端向前延伸 extend_start，后端向后延伸 extend_end
     3. 相邻字幕间距处理:
        - 原始间距 >= gap_threshold → 延伸后至少保留 min_gap 空白
        - 原始间距 < gap_threshold  → 前轴延伸到后轴开头
+       - 异说话人的真实重叠不压平（keep 模式的存在意义）
     4. 极短字幕向前合并 (min_duration):
-       时长 < min_duration 的字幕合并到前一条，设为 0 禁用
+       时长 < min_duration 且与前一条原始间距 <= gap_threshold 才合并，设为 0 禁用
     """
     if not subs:
         return subs
 
-    out = [replace(s) for s in subs]
+    # 显式拷贝 low_words：replace 浅拷贝共享列表引用，原地 += 会污染调用方数据
+    out = [replace(s, low_words=list(s.low_words)) for s in subs]
+
+    # separate 模式先按时间稳定排序（对齐可能轻微乱序）；无 speaker 时不排，遗留行为零变化
+    if any(s.speaker for s in out):
+        out.sort(key=lambda s: s.start)
+        if overlap_mode == "merge":
+            out = _merge_speaker_overlaps(out)
+
+    # 快照必须在重叠合并之后，否则 pairwise 循环索引错位
     raw_starts = [s.start for s in out]
     raw_ends = [s.end for s in out]
 
@@ -326,6 +389,13 @@ def post_process(
     for i in range(len(out) - 1):
         curr = out[i]
         nxt = out[i + 1]
+
+        # keep 模式：异说话人的真实重叠不做贴合/压平
+        # （同说话人 <= extend_end 的轻微重叠接受，不值得引入分轨钳制的复杂度）
+        if (curr.speaker and nxt.speaker and curr.speaker != nxt.speaker
+                and raw_starts[i + 1] < raw_ends[i]):
+            continue
+
         original_gap = raw_starts[i + 1] - raw_ends[i]
 
         if original_gap >= gap_threshold:
@@ -340,13 +410,25 @@ def post_process(
 
     if min_duration > 0:
         merged: list[Sub] = []
-        for sub in out:
-            if (sub.end - sub.start) < min_duration and merged:
+        last_raw_end: float | None = None
+        for i, sub in enumerate(out):
+            cross_speaker = bool(
+                merged and sub.speaker and merged[-1].speaker
+                and sub.speaker != merged[-1].speaker
+            )
+            near_prev = (
+                last_raw_end is not None
+                and (raw_starts[i] - last_raw_end) <= gap_threshold  # T34: 用原始间距判相邻
+            )
+            if (sub.end - sub.start) < min_duration and merged and near_prev and not cross_speaker:
                 prev = merged[-1]
                 prev.text = prev.text + sub.text
+                prev.low_words = prev.low_words + sub.low_words  # 重绑，勿用 +=
                 prev.end = max(prev.end, sub.end)
+                last_raw_end = max(last_raw_end, raw_ends[i])
             else:
                 merged.append(sub)
+                last_raw_end = raw_ends[i]
         for i, s in enumerate(merged, 1):
             s.index = i
         out = merged

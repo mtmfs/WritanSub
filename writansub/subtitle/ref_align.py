@@ -24,8 +24,8 @@ def map_whisper_to_ref(
     whisper_subs = sorted(whisper_subs, key=lambda s: s.start)
     ref_subs = sorted(ref_subs, key=lambda s: s.start)
 
-    # assigned[ref_index] = [whisper texts in order]
-    assigned: dict[int, list[str]] = {}
+    # assigned[ref_index] = [whisper subs in order]（存 Sub 本体以携带 low_words/speaker）
+    assigned: dict[int, list[Sub]] = {}
     search_start = 0
 
     for w_sub in whisper_subs:
@@ -44,20 +44,23 @@ def map_whisper_to_ref(
                 best_idx = r_idx
 
         if best_idx >= 0 and best_overlap > 0:
-            assigned.setdefault(best_idx, []).append(w_sub.text)
+            assigned.setdefault(best_idx, []).append(w_sub)
 
     result = []
     idx = 1
     for r_idx, r_sub in enumerate(ref_subs):
-        texts = assigned.get(r_idx)
-        if not texts:
+        group = assigned.get(r_idx)
+        if not group:
             continue
-        merged_text = " ".join(texts)
+        merged_text = " ".join(s.text for s in group)
+        speakers = {s.speaker for s in group if s.speaker}
         result.append(Sub(
             index=idx,
             start=r_sub.start,
             end=r_sub.end,
             text=merged_text,
+            low_words=[w for s in group for w in s.low_words],
+            speaker=speakers.pop() if len(speakers) == 1 else 0,
         ))
         idx += 1
 

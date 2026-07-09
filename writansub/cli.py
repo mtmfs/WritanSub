@@ -166,6 +166,7 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         mss_model=args.mss_model,
         ss_model=args.ss_model,
         save_intermediate=args.save_intermediate,
+        overlap_mode=args.overlap_mode,
         ref_srt=args.ref_srt,
         use_ref_sub=args.ref_embedded or args.ref_sub_track is not None,
         ref_sub_track=args.ref_sub_track,
@@ -457,6 +458,8 @@ def build_parser() -> argparse.ArgumentParser:
     g_tiger.add_argument("--mss-model", default="tiger-dnr", help="降噪模型 (默认: tiger-dnr)")
     g_tiger.add_argument("--ss-model", default="tiger-speech", help="分轨模型 (默认: tiger-speech)")
     g_tiger.add_argument("--save-intermediate", action="store_true", help="保存中间音轨")
+    g_tiger.add_argument("--overlap-mode", default="merge", choices=["merge", "keep"],
+                         help="separate 模式重叠处理: merge=压成一句(- A / - B), keep=保留双条重叠")
     g_ref = p_pipe.add_argument_group("参考字幕")
     g_ref.add_argument("--ref-srt", default=None, help="外部参考 SRT 文件路径 (时间轴参考)")
     g_ref.add_argument("--ref-embedded", action="store_true",

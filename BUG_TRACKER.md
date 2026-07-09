@@ -34,7 +34,7 @@ T03 附带收益：修复即顺带消掉 T16（pip 安装断裂）、P4 的 Ctrl
 |---|---|---|---|---|---|---|
 | [x] | T04 | 输出互相覆盖：whisper SRT 与最终结果都写 `<base>.srt`，`keep_whisper_srt` 无效；流水线开翻译时强制双语（`runner.py:126/274-280`）。2026-07-09 修复：终稿双轨（源语恒写 `<base>.srt`、翻译另写 `<base>_<lang>.srt` 如 `_chs`，两个都产）；中间/单步产物三段式 `<base>_<stage>_<model>.srt`；新增 `--no-bilingual`；助手 `stage_path`/`lang_code` 在 srt_io.py；README/ws 技能已同步。GUI 输出框自动填名维持旧样式 | A:WS-04 + B:#3 | 低 | 中※ | 15–30 行 + README |
 | [x] | T05 | Qwen3 + TIGER 组合必崩：`import torchaudio.transforms as T` 只在 MMS 分支内，Qwen3 路径引用 `T.Resample` 抛 UnboundLocalError；TIGER 输出 44100≠16000 使该路径必然触发（`runner.py:179/202`，B 已复现验证） | A:WS-05 + B:#2 | 极低 | 低 | 1–2 行 |
-| [ ] | T06 | review 索引体系错位：按原始编号生成 → ref 映射/短字幕合并重编号 → 用新编号回标旧文件，标错行；ASS 侧 `rfind(",,")` 解析脆弱；词全高置信时对齐标注静默丢失。根治 = 内存中标记、索引稳定后一次性生成 | A:WS-06+P4 + B:#4/#5 | 中高 | 中 | 60–120 行（runner.py + review.py 数据流重排） |
+| [x] | T06 | review 索引体系错位：按原始编号生成 → ref 映射/短字幕合并重编号 → 用新编号回标旧文件，标错行；ASS 侧 `rfind(",,")` 解析脆弱；词全高置信时对齐标注静默丢失。2026-07-09 根治：低置信词落 `Sub.low_words` 随本体携带（对齐/参考映射/合并三处变换自然跟随），流程末尾 `generate_review_final` 单点生成，`mark_low_align_in_review` 删除；无标记时清陈旧 review 文件。cli/GUI transcribe 单步路径索引稳定，保留旧 API | A:WS-06+P4 + B:#4/#5 | 中高 | 中 | 60–120 行（runner.py + review.py 数据流重排） |
 | [ ] | T07 | 翻译中途取消丢弃全部已付费译文：译文攒局部 dict 最后才回写（`translate/core.py:30/83-85`）。改为每批完成即回写。**注意**：真正的丢失点在三个调用方（GUI translate 页 / CLI / runner）均在 CancelledError 之后跳过 write_srt——只改 core.py 的内存回写无效，必须让调用方在取消路径也落盘 | A:WS-07 | 低 | 低 | 5–10 行 |
 | [ ] | T08 | 翻译完全信任 LLM 回显编号：不校验编号属于当前批次（整批重编号=常见失败模式，译文写错条并覆盖前批）；失败批次无重试只记日志 | B:#25 | 低中 | 低 | 30–50 行 |
 | [ ] | T09 | GUI 跨页共享全局控制状态：B 页"开始"清掉 A 页取消请求，任一页"取消"取消所有任务，两任务可同抢 GPU。最简方案 = 运行中全局互斥禁用其他页启动 | A:WS-08 | 中 | 中 | 30–60 行 |
@@ -49,7 +49,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
-| [ ] | T10 | separate 模式三连：重叠字幕被 `curr.end=nxt.start` 压平；`_whisper_with_overlap` 漏传 `vad_filter`；word_data 算完即弃 → review 静默失效 | A:WS-09 + B:#30(半) | 中 | 中 | 20–40 行 |
+| [x] | T10 | separate 模式三连：重叠字幕被 `curr.end=nxt.start` 压平；`_whisper_with_overlap` 漏传 `vad_filter`；word_data 算完即弃 → review 静默失效。2026-07-09 修复：cue 打 `speaker` 标签，重叠处理移入 post_process 双模式——默认 merge 压成一句（`- A` / `- B`，时间取并集，score 取 min），`--overlap-mode keep` 保留双条真实重叠（gap 循环跳过异说话人重叠对）；vad_filter 补传全轨（区域短块故意不开）；词级数据 (sub,word) 成对携带，separate 模式 review 复活 | A:WS-09 + B:#30(半) | 中 | 中 | 20–40 行 |
 | [x] | T11 | API key 明文三处：pipeline 日志（`pipeline.py:497`）+ `gui_state.json` + `writansub_translate.json`。日志脱敏 + gui_state 去 key | A:WS-10 + B:#11 | 低 | 低 | 10–20 行 |
 | [ ] | T12 | 镜像探测不可靠，双盲区：裸 socket 不走系统代理（Clash 场景误判，A 视角）+ TCP 通但 SNI 阶段被重置误判可达（B 视角）。改为经代理的 HTTPS 实测（network.py 全文件仅 20 行） | A:WS-11 + B:#28a | 低中 | 中 | 10–25 行 |
 | [ ] | T13 | silero-vad 走 `torch.hub` 从 GitHub 下载、无任何镜像处理，国内开 VAD 必败。换 silero-vad pip 包或预置模型 | B:#28b | 中 | 中 | 10–30 行 |
@@ -95,7 +95,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 |---|---|---|---|---|---|---|
 | [x] | T32 | 多选删除 `reversed(selectedItems())` 不保证行序，非连续多选可能删错（pipeline.py:362、preprocess.py:200）。取 row 降序删 | A:WS-23 | 低 | 低 | 5–10 行 ×2 处 |
 | [x] | T33 | `load_pp_config` 的 `float()` 只捕 ValueError，JSON null/数组抛 TypeError → GUI 启动即崩 | A:P4 + B:#26 | 极低 | 低 | 1–3 行 |
-| [ ] | T34 | 合并短字幕 `prev.text + sub.text` 无分隔符（拉丁语言产出 "helloworld"）且不看时间距离硬合并 | A:P4 + B:#22 | 低 | 低 | 5–10 行 |
+| [x] | T34 | 合并短字幕 `prev.text + sub.text` 无分隔符（拉丁语言产出 "helloworld"）且不看时间距离硬合并。2026-07-09 修复（随 T06 批）：合并加原始间距 ≤ gap_threshold 守卫，孤立短 cue 不再被跨静音拽进前句；分隔符半项经对齐判不做（用户场景纯 CJK） | A:P4 + B:#22 | 低 | 低 | 5–10 行 |
 | [x] | T35 | 无 N 卡用户每次启动弹驱动警告，无"不再提示"；且未考虑 cu124 用户（525+ 即可）的误报 | A:P4 + B(思考流) | 低 | 低 | 10–15 行 |
 | [ ] | T36 | GUI 关窗不检查运行中任务，daemon 线程被掐可能留半截 SRT。加确认对话框 | B:#30 | 低 | 低 | 10–20 行 |
 | [~] | T37 | 字幕提取 `timeout=60` 对大 MKV/机械盘偏紧（decode 600s 同理）。注意：T03 修好前超时本来就不生效，改值应在 T03 之后 | B:#30 | 极低 | 低 | 1–3 行 |
