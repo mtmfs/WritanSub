@@ -124,6 +124,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 ## 总拟修复批次路线（难度升序，4 批）
 
 每批附带该区域的最小冒烟测试（T02 这类"清理引入的回归"正是缺冒烟所致）。
+> 2026-07-09 起测试基建已建立：`tests/` pytest 套件 38 例，覆盖批次 1.5 改动面（srt_io 编码链 / 模型加载分流 / 翻译核心 / 转录核心 / config 容错 / registry 并发 / GUI 删行 helper），全部离线可重复。注意 pytest 暂未入锁（清华源 403），装法 `uv pip install pytest --index-url https://pypi.org/simple` + 代理；镜像恢复后 `uv add --group dev pytest` 转正。后续批次的定向测试直接往 tests/ 里加。
 
 **批次 0 · 止血**（用户许可后 1 分钟）
 删线上 `%LOCALAPPDATA%\mtmfs\WritanSub\writansub_pp.json`，默认值即刻回归。属用户机器操作，须单独征得同意。
