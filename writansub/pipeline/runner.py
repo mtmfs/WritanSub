@@ -1,11 +1,11 @@
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
-from writansub.subtitle.srt_io import parse_srt, write_srt, populate_romaji, merge_bilingual
+from writansub.subtitle.srt_io import parse_srt, write_srt, populate_romaji, merge_bilingual, stage_path, lang_code
 from writansub.subtitle.review import generate_review, write_review_files, mark_low_align_in_review
 from writansub.transcribe.core import transcribe
 from writansub.translate.core import translate_subs
@@ -30,6 +30,7 @@ class PipelineConfig:
     keep_aligned_srt: bool = False
     generate_review: bool = False
     translate: bool = False
+    bilingual: bool = True          # 翻译终稿 <base>_<lang>.srt 的内容：双语 / 单语译文
     api_base: str = TRANSLATE_DEFAULTS["api_base"]
     api_key: str = field(default=TRANSLATE_DEFAULTS["api_key"], repr=False)
     llm_model: str = TRANSLATE_DEFAULTS["model"]
@@ -119,7 +120,7 @@ def run_pipeline(
                 if low_c > 0:
                     write_review_files(base, srt_c, ass_c)
             if cfg.keep_whisper_srt:
-                write_srt(subs, base + ".srt")
+                write_srt(subs, stage_path(base, "original", "whisper-" + cfg.whisper_model))
     finally:
         reg.release_model(wh)
 
@@ -232,7 +233,7 @@ def run_pipeline(
                     if low_a:
                         mark_low_align_in_review(base, low_a)
                 if cfg.keep_aligned_srt:
-                    write_srt(final, base + "_aligned.srt")
+                    write_srt(final, stage_path(base, "aligned", cfg.align_model))
         finally:
             reg.release_model(mh)
 
@@ -242,8 +243,15 @@ def run_pipeline(
         for media, subs in sub_results.items():
             aligned_results[media] = post_process(subs, **pp)
 
+    # 源语终稿恒写 <base>.srt（先于翻译阶段落盘，翻译中途取消也不丢日文轴）
+    if aligned_results and not _cancelled():
+        for media, subs in aligned_results.items():
+            write_srt(subs, os.path.splitext(media)[0] + ".srt")
+
+    # 翻译终稿另写 <base>_<lang>.srt，与源语终稿并存
     if cfg.translate and aligned_results and not _cancelled():
         log(f">>> Phase {num_phases}/{num_phases}: AI 翻译")
+        suffix = lang_code(cfg.target_lang)
         for idx, media in enumerate(cfg.media_files, 1):
             if _cancelled() or media not in aligned_results:
                 continue
@@ -265,13 +273,12 @@ def run_pipeline(
             )
             done = sum(1 for s in aligned_results[media] if s.translated)
             log(f"[翻译 {idx}/{total}] {done}/{len(aligned_results[media])} 条完成翻译")
-            write_srt(
-                merge_bilingual(aligned_results[media]),
-                os.path.splitext(media)[0] + ".srt",
-            )
-    elif aligned_results and not _cancelled():
-        for media, subs in aligned_results.items():
-            write_srt(subs, os.path.splitext(media)[0] + ".srt")
+            if cfg.bilingual:
+                out_subs = merge_bilingual(aligned_results[media])
+            else:
+                out_subs = [replace(s, text=s.translated or s.text)
+                            for s in aligned_results[media]]
+            write_srt(out_subs, f"{os.path.splitext(media)[0]}_{suffix}.srt")
 
     if not _cancelled():
         progress(1.0, "任务完成")

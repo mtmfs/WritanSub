@@ -321,22 +321,27 @@ writansub-cli --help
 
 所有输出文件都生成在**输入文件所在的同一个文件夹**里，文件名以输入文件名为前缀。
 
+命名规则（CLI，2026-07 起）：**终稿**占最简名——源语终稿 `video.srt`，翻译终稿 `video_<语言>.srt`（如 `_chs`）；**中间产物**三段式 `video_<阶段>_<模型>.srt`。
+
 假设你的输入文件叫 `video.mp4`：
 
 | 文件 | 说明 | 生成条件 |
 |------|------|---------|
-| `video.srt` | Whisper 原始识别结果（未对齐） | 勾选「保留 Whisper SRT」时保留 |
-| `video_aligned.srt` | 经 MMS_FA 强制打轴后的字幕，**时间轴最准**，通常这就是你要的最终结果 | 只要跑了打轴就生成 |
-| `video_review.srt` | 校对版 SRT：低置信词用 `【?词】` 包裹，低置信句用 `【】` 包裹 | 勾选「生成 Review 文件」且存在低置信内容时生成 |
+| `video.srt` | **源语终稿**：对齐+后处理完成的字幕，时间轴最准，通常这就是你要的最终结果 | 流水线跑完必生成，不会被翻译覆盖 |
+| `video_chs.srt` | **翻译终稿**：默认双语（原文+译文），`--no-bilingual` 时为单语译文；后缀随目标语言变化 | 开 AI 翻译时生成，与源语终稿并存 |
+| `video_original_whisper-large-v3.srt` | Whisper 原始识别结果（未对齐），模型段随所选模型 | `--keep-whisper-srt` 时保留 |
+| `video_aligned_mms_fa.srt` | 强制打轴后、未做最终后处理留档的对齐版，模型段随对齐模型 | `--keep-aligned-srt` 时保留 |
+| `video_review.srt` | 校对版 SRT：低置信词用 `【?词】` 包裹，低置信句用 `【】` 包裹 | 开 Review 且存在低置信内容时生成 |
 | `video_review.ass` | 校对版 ASS 字幕：低置信词显示为红色高亮，可直接拖进播放器预览 | 同上 |
-| `video_translated.srt` | AI 翻译后的字幕 | 使用 AI 翻译功能时生成 |
-| `video_dnr.wav` | TIGER 降噪后的音频 | 预处理勾选了「降噪」且勾选了「保存中间音轨」时生成 |
-| `video_speech.wav` | TIGER 说话人分轨后的音频 | 预处理勾选了「对话分轨」且勾选了「保存中间音轨」时生成 |
+| `video_dialog/_effects/_music.wav` | TIGER 分离的中间音轨 | 降噪且「保存中间音轨」时生成 |
+| `video_spk1/_spk2.wav` | 说话人分轨后的音频 | 分轨且「保存中间音轨」时生成 |
+
+单步命令的默认输出同规则：`transcribe` → `_original_whisper-<模型>.srt`；`align` → `_aligned_<模型>.srt`；`translate` → `_<语言>.srt`（如 `_chs.srt`）。GUI 输出框的自动填名维持旧样式。
 
 **我该用哪个字幕文件？**
 
-- 只要时间轴准确的对齐字幕 → `video_aligned.srt`
-- 要翻译成中文 → 基于 `video_aligned.srt` 再跑 AI 翻译，得到 `video_translated.srt`
+- 只要时间轴准确的日文字幕 → `video.srt`
+- 要中文/双语 → 开 AI 翻译，拿 `video_chs.srt`（日文轴照样在 `video.srt`）
 - 要校对哪些地方机器可能识别错了 → 打开 `video_review.ass` 边看边改
 
 ---
@@ -453,9 +458,10 @@ writansub-cli pipeline video.mp4 --ref-srt reference.srt --ref-direct
 | `--ref-srt` | 外部参考 SRT | 无 |
 | `--ref-direct` | 直接使用参考轴 | 不启用 |
 | `--review` | 生成 Review 标记文件 | 不生成 |
-| `--translate` | 启用 AI 翻译 | 不启用 |
-| `--keep-whisper-srt` | 保留原始识别 SRT | 不保留 |
-| `--keep-aligned-srt` | 保留对齐 SRT | 不保留 |
+| `--translate` | 启用 AI 翻译（终稿另存 `<base>_<语言>.srt`，源语终稿不受影响） | 不启用 |
+| `--no-bilingual` | 翻译终稿输出单语译文 | 默认双语 |
+| `--keep-whisper-srt` | 保留原始识别 SRT（`_original_whisper-<模型>.srt`） | 不保留 |
+| `--keep-aligned-srt` | 保留对齐 SRT（`_aligned_<模型>.srt`） | 不保留 |
 
 ### 2. preprocess — 音频预处理
 
@@ -476,7 +482,7 @@ writansub-cli preprocess a.mp4 b.mp4 --separate --device cuda
 # 单文件识别
 writansub-cli transcribe video.mp4 -o output.srt
 
-# 批量识别（输出自动命名为 a.srt, b.srt...）
+# 批量识别（输出自动命名为 a_original_whisper-large-v3.srt ...）
 writansub-cli transcribe a.mp4 b.mp4 --lang ja
 
 # 启用 VAD + 初始提示
@@ -663,7 +669,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 #### Q11：输出文件在哪里？
 
-**答**：所有输出文件都在**你选择的输入文件所在的同一个文件夹**里。例如你选了 `D:\视频\demo.mp4`，那么 `demo_aligned.srt`、`demo_review.srt` 等都会生成在 `D:\视频\` 文件夹里。
+**答**：所有输出文件都在**你选择的输入文件所在的同一个文件夹**里。例如你选了 `D:\视频\demo.mp4`，那么 `demo.srt`、`demo_review.srt` 等都会生成在 `D:\视频\` 文件夹里。
 
 ---
 

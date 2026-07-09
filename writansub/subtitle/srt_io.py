@@ -1,7 +1,35 @@
 import dataclasses
+import re
 from typing import Any
 
 from writansub.types import Sub, fmt_srt_time
+
+# 常见目标语言 → 文件名后缀（lang_code 用）
+_LANG_CODES = {
+    "简体中文": "chs", "中文": "chs",
+    "繁体中文": "cht", "繁體中文": "cht",
+    "English": "en", "english": "en", "英文": "en", "英语": "en",
+    "日本語": "ja", "日文": "ja", "日语": "ja",
+    "한국어": "ko", "韩文": "ko", "韩语": "ko",
+}
+
+
+def stage_path(base: str, stage: str, model: str) -> str:
+    """中间/单步产物统一命名：<base>_<stage>_<model>.srt（如 _original_whisper-large-v3）。
+
+    终稿不走此规则：源语终稿恒为 <base>.srt，翻译终稿为 <base>_<lang_code>.srt。
+    """
+    return f"{base}_{stage}_{model}.srt"
+
+
+def lang_code(target_lang: str) -> str:
+    """目标语言 → 翻译产物文件名后缀。常见语言查表（简体中文→chs 等），
+    未命中回退为原文做文件名安全化。"""
+    code = _LANG_CODES.get(target_lang.strip())
+    if code:
+        return code
+    safe = re.sub(r'[\\/:*?"<>|\s]+', "-", target_lang.strip()).strip("-")
+    return safe or "translated"
 
 
 def _subs_from_pysrt(items: Any, lang: str | None) -> list[Sub]:

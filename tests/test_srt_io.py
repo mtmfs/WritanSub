@@ -72,3 +72,31 @@ def test_write_read_roundtrip(tmp_path):
     back = parse_srt(out)
     assert back[0].text == JA_LINE1
     assert back[0].start == 1.0 and back[0].end == 3.5
+
+
+# ---- T04 命名助手 ----
+
+def test_stage_path():
+    from writansub.subtitle.srt_io import stage_path
+    assert stage_path("D:/v/ep01", "original", "whisper-large-v3") == \
+        "D:/v/ep01_original_whisper-large-v3.srt"
+    assert stage_path("ep01", "aligned", "mms_fa") == "ep01_aligned_mms_fa.srt"
+    assert stage_path("ep01", "aligned", "qwen3-fa-0.6b") == "ep01_aligned_qwen3-fa-0.6b.srt"
+
+
+def test_lang_code_mapping():
+    from writansub.subtitle.srt_io import lang_code
+    assert lang_code("简体中文") == "chs"
+    assert lang_code("繁體中文") == "cht"
+    assert lang_code("繁体中文") == "cht"
+    assert lang_code("English") == "en"
+    assert lang_code("日本語") == "ja"
+    assert lang_code(" 简体中文 ") == "chs"  # 容忍首尾空白
+
+
+def test_lang_code_fallback_sanitized():
+    from writansub.subtitle.srt_io import lang_code
+    assert lang_code("français") == "français"          # 未命中原样保留
+    assert lang_code("Pirate Speak") == "Pirate-Speak"  # 空白转连字符
+    assert lang_code('a/b\\c:d*e?f"g<h>i|j') == "a-b-c-d-e-f-g-h-i-j"
+    assert lang_code("   ") == "translated"             # 全空回退兜底

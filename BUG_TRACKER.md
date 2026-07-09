@@ -32,7 +32,7 @@ T03 附带收益：修复即顺带消掉 T16（pip 安装断裂）、P4 的 Ctrl
 
 | 状态 | ID | 问题 | 来源 | 难度 | 风险 | 改动量 |
 |---|---|---|---|---|---|---|
-| [ ] | T04 | 输出互相覆盖：whisper SRT 与最终结果都写 `<base>.srt`，`keep_whisper_srt` 无效；流水线开翻译时强制双语（`runner.py:126/274-280`） | A:WS-04 + B:#3 | 低 | 中※ | 15–30 行 + README |
+| [x] | T04 | 输出互相覆盖：whisper SRT 与最终结果都写 `<base>.srt`，`keep_whisper_srt` 无效；流水线开翻译时强制双语（`runner.py:126/274-280`）。2026-07-09 修复：终稿双轨（源语恒写 `<base>.srt`、翻译另写 `<base>_<lang>.srt` 如 `_chs`，两个都产）；中间/单步产物三段式 `<base>_<stage>_<model>.srt`；新增 `--no-bilingual`；助手 `stage_path`/`lang_code` 在 srt_io.py；README/ws 技能已同步。GUI 输出框自动填名维持旧样式 | A:WS-04 + B:#3 | 低 | 中※ | 15–30 行 + README |
 | [x] | T05 | Qwen3 + TIGER 组合必崩：`import torchaudio.transforms as T` 只在 MMS 分支内，Qwen3 路径引用 `T.Resample` 抛 UnboundLocalError；TIGER 输出 44100≠16000 使该路径必然触发（`runner.py:179/202`，B 已复现验证） | A:WS-05 + B:#2 | 极低 | 低 | 1–2 行 |
 | [ ] | T06 | review 索引体系错位：按原始编号生成 → ref 映射/短字幕合并重编号 → 用新编号回标旧文件，标错行；ASS 侧 `rfind(",,")` 解析脆弱；词全高置信时对齐标注静默丢失。根治 = 内存中标记、索引稳定后一次性生成 | A:WS-06+P4 + B:#4/#5 | 中高 | 中 | 60–120 行（runner.py + review.py 数据流重排） |
 | [ ] | T07 | 翻译中途取消丢弃全部已付费译文：译文攒局部 dict 最后才回写（`translate/core.py:30/83-85`）。改为每批完成即回写。**注意**：真正的丢失点在三个调用方（GUI translate 页 / CLI / runner）均在 CancelledError 之后跳过 write_srt——只改 core.py 的内存回写无效，必须让调用方在取消路径也落盘 | A:WS-07 | 低 | 低 | 5–10 行 |

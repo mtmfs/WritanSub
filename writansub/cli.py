@@ -7,6 +7,7 @@ from dataclasses import replace
 
 from writansub import __version__
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
+from writansub.subtitle.srt_io import stage_path, lang_code
 
 
 def _ensure_utf8() -> None:
@@ -173,6 +174,7 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         keep_aligned_srt=args.keep_aligned_srt,
         generate_review=args.review,
         translate=args.translate,
+        bilingual=args.bilingual,
         api_base=tr.get("api_base", TRANSLATE_DEFAULTS["api_base"]),
         api_key=tr.get("api_key", TRANSLATE_DEFAULTS["api_key"]),
         llm_model=tr.get("model", TRANSLATE_DEFAULTS["model"]),
@@ -249,7 +251,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
     files = args.files
     if args.output and len(files) > 1:
-        _log("错误: -o/--output 只能用于单文件；多文件时输出自动命名为 <media>.srt")
+        _log("错误: -o/--output 只能用于单文件；多文件时输出自动命名为 <media>_original_whisper-<模型>.srt")
         sys.exit(1)
 
     wc = args.word_conf_threshold if args.word_conf_threshold is not None else PP_DEFAULTS["word_conf_threshold"]
@@ -269,7 +271,8 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
         for idx, media in enumerate(files, 1):
             if len(files) > 1:
                 _log(f"── [{idx}/{len(files)}] {os.path.basename(media)} ──")
-            output = args.output or os.path.splitext(media)[0] + ".srt"
+            output = args.output or stage_path(
+                os.path.splitext(media)[0], "original", "whisper-" + args.whisper_model)
 
             subs, word_data = do_transcribe(
                 media, lang=args.lang, device=args.device,
@@ -311,7 +314,7 @@ def cmd_align(args: argparse.Namespace) -> None:
         _log(f"错误: --audio 和 --srt 数量不一致 ({len(audios)} vs {len(srts)})")
         sys.exit(1)
     if args.output and len(audios) > 1:
-        _log("错误: -o/--output 只能用于单对；多对时输出自动命名为 <srt>_aligned.srt")
+        _log("错误: -o/--output 只能用于单对；多对时输出自动命名为 <srt>_aligned_<模型>.srt")
         sys.exit(1)
 
     file_cfg = _load_config_file(args.config)
@@ -346,7 +349,8 @@ def cmd_align(args: argparse.Namespace) -> None:
         for idx, (audio, srt) in enumerate(zip(audios, srts), 1):
             if len(audios) > 1:
                 _log(f"── [{idx}/{len(audios)}] {os.path.basename(audio)} ──")
-            output = args.output or os.path.splitext(srt)[0] + "_aligned.srt"
+            output = args.output or stage_path(
+                os.path.splitext(srt)[0], "aligned", args.align_model)
 
             _progress_bar(0.0, "加载音频...")
             waveform = load_audio(audio)
@@ -390,10 +394,11 @@ def cmd_translate(args: argparse.Namespace) -> None:
     from writansub.translate.core import translate_subs
 
     srt = args.file
-    output = args.output or os.path.splitext(srt)[0] + "_translated.srt"
 
     file_cfg = _load_config_file(args.config)
     tr = _resolve_translate(args, file_cfg)
+    output = args.output or (
+        os.path.splitext(srt)[0] + "_" + lang_code(tr["target_lang"]) + ".srt")
 
     _setup_cancel_handler()
     ResourceRegistry.instance().reset_controls()
@@ -465,6 +470,8 @@ def build_parser() -> argparse.ArgumentParser:
     g_out.add_argument("--keep-aligned-srt", action="store_true", help="保留对齐 SRT")
     g_out.add_argument("--review", action="store_true", help="生成 Review 标记文件")
     g_out.add_argument("--translate", action="store_true", help="启用 AI 翻译")
+    g_out.add_argument("--no-bilingual", dest="bilingual", action="store_false",
+                       help="翻译终稿 <base>_<语言>.srt 输出单语译文 (默认双语)")
     _add_pp_args(p_pipe)
     _add_translate_args(p_pipe)
     p_pipe.set_defaults(func=cmd_pipeline)
@@ -482,7 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ── transcribe ──
     p_tr = sub.add_parser("transcribe", help="语音识别 (支持多文件批处理)")
     p_tr.add_argument("files", nargs="+", help="媒体文件路径 (可多个)")
-    p_tr.add_argument("-o", "--output", help="输出 SRT 路径 (仅单文件可用；多文件时自动命名为 <media>.srt)")
+    p_tr.add_argument("-o", "--output", help="输出 SRT 路径 (仅单文件可用；多文件时自动命名为 <media>_original_whisper-<模型>.srt)")
     _add_lang_arg(p_tr)
     _add_device_arg(p_tr)
     p_tr.add_argument("--whisper-model", default="large-v3", help="Whisper 模型 (默认: large-v3)")
@@ -498,7 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_al = sub.add_parser("align", help="强制打轴 (支持多对批处理)")
     p_al.add_argument("--audio", required=True, nargs="+", help="音频文件路径 (可多个)")
     p_al.add_argument("--srt", required=True, nargs="+", help="输入 SRT 字幕路径 (可多个，与 --audio 一一对应)")
-    p_al.add_argument("-o", "--output", help="输出 SRT 路径 (仅单对可用；多对时自动命名为 <srt>_aligned.srt)")
+    p_al.add_argument("-o", "--output", help="输出 SRT 路径 (仅单对可用；多对时自动命名为 <srt>_aligned_<模型>.srt)")
     p_al.add_argument("--config", help="JSON 配置文件")
     _add_lang_arg(p_al)
     _add_device_arg(p_al)
@@ -510,7 +517,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ── translate ──
     p_tl = sub.add_parser("translate", help="AI 翻译")
     p_tl.add_argument("file", help="输入 SRT 字幕路径")
-    p_tl.add_argument("-o", "--output", help="输出 SRT 路径 (默认: _translated.srt)")
+    p_tl.add_argument("-o", "--output", help="输出 SRT 路径 (默认: <输入>_<语言>.srt, 如 _chs.srt)")
     p_tl.add_argument("--config", help="JSON 配置文件")
     p_tl.add_argument("--bilingual", action="store_true", help="双语输出 (原文+译文)")
     _add_translate_args(p_tl)
