@@ -18,6 +18,7 @@ class PipelineConfig:
     lang: str = "ja"
     device: str = "cuda"
     whisper_model: str = "large-v3"
+    compute_type: str = "int8"          # faster-whisper 量化 (int8/int8_float16/float16)
     align_model: str = "mms_fa"
     condition_on_prev: bool = True
     vad_filter: bool = False
@@ -93,10 +94,15 @@ def run_pipeline(
 
     def _w_factory():
         from faster_whisper import WhisperModel
-        return WhisperModel(cfg.whisper_model, device=cfg.device, compute_type="int8")
+        return WhisperModel(cfg.whisper_model, device=cfg.device, compute_type=cfg.compute_type)
 
-    wh = reg.acquire_model(f"whisper:{cfg.whisper_model}", cfg.device, _w_factory)
+    # 缓存键带 compute_type：同进程切换量化档不得复用旧模型
+    wh = reg.acquire_model(
+        f"whisper:{cfg.whisper_model}:{cfg.compute_type}", cfg.device, _w_factory)
     whisper_model = reg.get_model(wh)
+
+    # T28: 无预处理时原片预解码 16k 落临时 wav，whisper 与对齐共用（原片只解一次）
+    pre_decoded: dict[str, str] = {}
 
     try:
         for idx, media in enumerate(cfg.media_files, 1):
@@ -111,6 +117,7 @@ def run_pipeline(
 
             subs, word_data = _transcribe_single(
                 media, tiger_results.get(media), cfg, whisper_model, _w_p, log,
+                pre_decoded=pre_decoded,
             )
             sub_results[media] = subs
             log(f"[Whisper {idx}/{total}] 产出 {len(subs)} 条字幕, {sum(len(w) for w in word_data)} 个词")
@@ -200,6 +207,10 @@ def run_pipeline(
                     waveform = tiger_data["dialog_wav"]
                     if src_sr != target_sr:
                         waveform = T.Resample(src_sr, target_sr)(waveform)
+                elif media in pre_decoded:
+                    # T28: 直读预解码的 16k wav（stdlib wave 与 save_wav 对称，不再过 ffmpeg）
+                    from writansub.preprocess.core import load_wav
+                    waveform, _sr16 = load_wav(pre_decoded[media])
                 else:
                     waveform = load_audio(media)
 
@@ -240,6 +251,14 @@ def run_pipeline(
         log("参考字幕直接模式: 跳过强制对齐")
         for media, subs in sub_results.items():
             aligned_results[media] = post_process(subs, overlap_mode=cfg.overlap_mode, **pp)
+
+    # 预解码临时 wav 至此用完，统一清理（取消/异常路径的残留由系统临时目录兜底）
+    for p in pre_decoded.values():
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
+    pre_decoded.clear()
 
     # 源语终稿恒写 <base>.srt（先于翻译阶段落盘，翻译中途取消也不丢日文轴）
     # review 同点生成：此时索引已全程稳定，词级+行级标注一次写盘（T06）
@@ -341,6 +360,7 @@ def _transcribe_single(
     whisper_model: Any,
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
+    pre_decoded: dict | None = None,
 ) -> tuple[list, list]:
     from writansub.preprocess.core import save_wav
 
@@ -352,6 +372,16 @@ def _transcribe_single(
         tmp_dialog.close()
         save_wav(tiger_data["dialog_wav"], tmp_dialog.name, tiger_data["dialog_sr"])
         whisper_input = tmp_dialog.name
+    elif pre_decoded is not None:
+        # T28: 无预处理时原片在此解唯一一次（16k 单声道），落临时 wav
+        # 供 whisper 和对齐两个阶段共用；清理由 run_pipeline 统一负责
+        tmp16 = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp16.close()
+        wav16, _ = ResourceRegistry.instance().decode_audio(media, sample_rate=16000)
+        save_wav(wav16, tmp16.name, 16000)
+        del wav16
+        whisper_input = tmp16.name
+        pre_decoded[media] = tmp16.name
 
     try:
         overlap_r = tiger_data.get("overlap_regions") if tiger_data else None

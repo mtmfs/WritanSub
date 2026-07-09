@@ -28,6 +28,19 @@ def save_wav(waveform: torch.Tensor, path: str, sr: int) -> None:
         wf.writeframes(pcm)
 
 
+def load_wav(path: str) -> tuple[torch.Tensor, int]:
+    """save_wav 的对称读取（stdlib wave，16-bit PCM）。返回 ([nch, T] float32, sr)。
+
+    torchaudio 2.10 的 load 需要 torchcodec 后端，本项目不引入；wav 直读足够。
+    """
+    with wave.open(path, "rb") as wf:
+        sr = wf.getframerate()
+        nch = wf.getnchannels()
+        raw = wf.readframes(wf.getnframes())
+    data = torch.frombuffer(bytearray(raw), dtype=torch.int16).float() / 32767.0
+    return data.view(-1, nch).T.contiguous(), sr
+
+
 def _hf_model_cached(cache_dir: str, repo_id: str) -> bool:
     dir_name = "models--" + repo_id.replace("/", "--")
     snap_dir = os.path.join(cache_dir, dir_name, "snapshots")

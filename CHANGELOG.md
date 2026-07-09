@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - **separate 模式重叠双模式**：默认把跨说话人重叠压成一句（`- 甲` / `- 乙`），`--overlap-mode keep` 保留双条真实重叠（不再被压平截尾）；VAD 开关在 separate 模式下生效；该模式的词级 review 恢复可用。
 - 短字幕向前合并只在与前句时间相邻（原始间距 ≤ gap-threshold）时发生，孤立短句不再被跨静音合并。
 - TIGER-DnR 降噪默认只跑人声子模型，预处理约 3 倍提速（`--save-intermediate` 时仍产三轨）。
+- 无预处理流水线原片只解码一次（预解码 16k 临时 wav，whisper 与对齐共用）；注意该模式下 whisper 输入前端改变，BGM 极重的素材转录结果可能变化（实测为改善）。
+- 新增 `--compute-type {int8,int8_float16,float16}`（pipeline/transcribe），默认 int8 不变。
 - GUI 后处理参数改为"编辑即存"，根除多页同名参数互相覆盖导致的全零自锁。
 
 ### Fixed

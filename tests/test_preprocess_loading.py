@@ -80,3 +80,15 @@ def test_cache_miss_goes_online_directly(cache_miss, logs, tmp_path):
     assert ppc._from_pretrained_cached(cls, "fake/repo", str(tmp_path), "cpu") == "MODEL_OK"
     assert cls.calls == [False]
     assert logs == []
+
+
+def test_save_load_wav_roundtrip(tmp_path):
+    """T28：load_wav 与 save_wav 对称，int16 量化误差内还原。"""
+    import torch
+    wav = (torch.linspace(-0.9, 0.9, 1600)).unsqueeze(0)  # [1, T]
+    p = str(tmp_path / "rt.wav")
+    ppc.save_wav(wav, p, 16000)
+    back, sr = ppc.load_wav(p)
+    assert sr == 16000
+    assert back.shape == wav.shape
+    assert (back - wav).abs().max() < 1e-3  # 16-bit 量化误差内

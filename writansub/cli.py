@@ -176,6 +176,7 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         generate_review=args.review,
         translate=args.translate,
         bilingual=args.bilingual,
+        compute_type=args.compute_type,
         api_base=tr.get("api_base", TRANSLATE_DEFAULTS["api_base"]),
         api_key=tr.get("api_key", TRANSLATE_DEFAULTS["api_key"]),
         llm_model=tr.get("model", TRANSLATE_DEFAULTS["model"]),
@@ -263,9 +264,10 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
     def _w_factory():
         from faster_whisper import WhisperModel
-        return WhisperModel(args.whisper_model, device=args.device, compute_type="int8")
+        return WhisperModel(args.whisper_model, device=args.device, compute_type=args.compute_type)
 
-    wh = reg.acquire_model(f"whisper:{args.whisper_model}", args.device, _w_factory)
+    wh = reg.acquire_model(
+        f"whisper:{args.whisper_model}:{args.compute_type}", args.device, _w_factory)
     whisper_model = reg.get_model(wh)
 
     try:
@@ -446,6 +448,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lang_arg(p_pipe)
     _add_device_arg(p_pipe)
     p_pipe.add_argument("--whisper-model", default="large-v3", help="Whisper 模型 (默认: large-v3)")
+    p_pipe.add_argument("--compute-type", default="int8", choices=["int8", "int8_float16", "float16"],
+                        help="Whisper 量化档 (默认: int8; CUDA 上 float16 更快更准但更吃显存)")
     p_pipe.add_argument("--align-model", default="mms_fa",
                         choices=["mms_fa", "qwen3-fa-0.6b"], help="对齐模型 (默认: mms_fa)")
     p_pipe.add_argument("--no-cond-prev", action="store_true", help="禁用前文调优")
@@ -496,6 +500,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_lang_arg(p_tr)
     _add_device_arg(p_tr)
     p_tr.add_argument("--whisper-model", default="large-v3", help="Whisper 模型 (默认: large-v3)")
+    p_tr.add_argument("--compute-type", default="int8", choices=["int8", "int8_float16", "float16"],
+                      help="Whisper 量化档 (默认: int8)")
     p_tr.add_argument("--no-cond-prev", action="store_true", help="禁用前文调优")
     p_tr.add_argument("--vad", action="store_true", help="启用 VAD 跳过静音段")
     p_tr.add_argument("--initial-prompt", default=None,
