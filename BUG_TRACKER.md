@@ -56,7 +56,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 | [x] | T14 | ffprobe 回退路径必败：imageio-ffmpeg 不含 ffprobe，推导路径不存在，"参考内嵌字幕"无系统 ffmpeg 必败且被吞异常。明确报错+提示，或改用 ffmpeg 探测 | A:WS-12 + B:#8 | 低 | 低 | 10–30 行 |
 | [x] | T15 | CLI 无法表达"自动选轨"（帮助文本承诺永不可达）；`select_track` 未命中语言时静默回退第一轨，signs 轨会静默丢大量台词 | A:WS-13 + B:#30(半) | 低 | 低 | 15–30 行 |
 | [ ] | T16 | pip 安装路径断裂：`writansub_native` 不在 PyPI（B 实测 404），uv sources 映射对 pip 无效，README 方法二不可用 | A:WS-14 + B:#9 | — | — | 做 T03 方案 B 自动消失；否则文档+pyproject ~10 行 |
-| [ ] | T17 | 波形常驻内存（批处理全量留 RAM，2h 文件单条 dialog ~1.27GB）+ 模型阶段间从不卸载（`release_model` 只清死标志），6–8GB 卡后期 OOM | A:WS-15 + B:#13 | 中 | 中高※ | 30–60 行 |
+| [ ] | T17 | 波形常驻内存（批处理全量留 RAM，2h 文件单条 dialog ~1.27GB）+ 模型阶段间从不卸载（`release_model` 只清死标志），6–8GB 卡后期 OOM。**2026-07-09 用户判暂缓**（生产未暴露，验证成本高收益低），移出批次 3 待回头；T20 复核遗留（align 页模型常驻）继续并在此项 | A:WS-15 + B:#13 | 中 | 中高※ | 30–60 行 |
 | [x] | T18 | 非 UTF-8 字幕直接 UnicodeDecodeError（GBK/Shift-JIS 存量极常见）。utf-8-sig 优先 + 编码探测回退 | A:WS-16 + B:#27 | 低 | 低 | 10–20 行 |
 | [x] | T19 | `_hf_model_cached` 见 snapshots 非空即强制 `local_files_only`，半截下载把用户锁死离线且报错不指真因 | B:#29 | 低 | 低 | 5–15 行 |
 | [x] | T20 | align 页每次运行冷加载模型（init+register+finally unload），与 pipeline/whisper 页的 acquire 缓存模式不一致，重复打轴极慢 | B:#14b | 低 | 低中 | 10–20 行 |
@@ -78,7 +78,7 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 | [x] | T25 | espnet + espnet-model-zoo 重依赖只服务被注释掉的 tfgridnet 分支（~70 行死码），装机体积大头 | A:WS-17 + B:#18 | 低 | 低 | 净删 ~70 行 + 2 依赖 |
 | [x] | T26 | TTS 整条线废案（~650 行）：tts.py import 的 `TTS_MODELS`/`load_tts_config` 不存在，一碰即崩；`run_mms_fa` 重复对齐逻辑。移入 archive/ | A:WS-18 + B:#17 | 低 | 低 | 净删 ~650 行 |
 | [x] | T27 | `parse_srt` 默认 `lang="ja"` 强制算罗马音：翻译路径、ref 解析白白加载 cutlet/MeCab 逐条形态素分析。默认改 `lang=None`，对齐调用方显式传 | A:WS-21 + B:#19 | 低 | 低中 | 10–20 行（需核查全部调用方） |
-| [ ] | T28 | 同一文件被 ffmpeg 解码 2–3 次；`compute_type` 三处硬编码 int8（CUDA 上 fp16 常更快更准，README 显存表还是 fp16 口径）。int8 参数化易；消重复解码需传递波形或缓存 | A:WS-22 + B(思考流) | 低→中 | 低→中 | 参数化 15–30 行；消重复解码 30–80 行 |
+| [ ] | T28 | 同一文件被 ffmpeg 解码 2–3 次；`compute_type` 三处硬编码 int8（CUDA 上 fp16 常更快更准，README 显存表还是 fp16 口径）。int8 参数化易；消重复解码需传递波形或缓存。**2026-07-09 确认要修**：采用解码落盘（临时文件按需读）方案，自身不增驻留，与 T17 解绑可单独做；`--compute-type` 参数化默认维持 int8 | A:WS-22 + B(思考流) | 低→中 | 低→中 | 参数化 15–30 行；消重复解码 30–80 行 |
 | [ ] | T29 | 数字被删致对齐系统性偏移：`japanese_to_romaji` 送 cutlet 前删光数字，音频里数字是读出来的（"3人"→只对"人"）。**财经素材满屏数字，疑似日常影响最大的质量项**。让数字进 cutlet 转读音 | B:#23 | 中※ | 中 | 5–15 行 |
 | [ ] | T30 | 存储布局割裂：launcher 设 `WRITANSUB_HOME` 无人读；`CACHE_DIR` 无环境变量覆盖而 MODELS/LOG 有；配置走 platformdirs、模型/缓存/日志走 PROJECT_ROOT；卸载器不清理数 GB 模型残留 | B:#21b（部分 A:WS-19） | 中 | 中※※ | 20–50 行 + 安装器脚本 |
 | [~] | T31 | 死代码杂项：`aitrans.py` 旧名残留、空包 core/、空目录 tmpkanji_ws/、根目录遗留配置、CLAUDE.md 死链、`cancelled` 死参数、`runner.py` 未用 `import torch`、`_log` 组装未调用、`word_results` 只写不读、`enable_start` 从不 emit、`_InfoDelegate` elide 无效 | A:WS-19 + B:#21 | 低 | 低 | 净删为主。2026-07-09 已清（根目录遗留配置移入 archive/legacy_root_configs 而非删除，内含 api_key）；`_log` 保留并由 T40 启用；`_InfoDelegate` 系在用类非死码，遗留待后续批次 |
