@@ -78,9 +78,10 @@ T07 与 T08 同在 `translate/core.py`（全文件仅 94 行），建议同批�
 | [x] | T25 | espnet + espnet-model-zoo 重依赖只服务被注释掉的 tfgridnet 分支（~70 行死码），装机体积大头 | A:WS-17 + B:#18 | 低 | 低 | 净删 ~70 行 + 2 依赖 |
 | [x] | T26 | TTS 整条线废案（~650 行）：tts.py import 的 `TTS_MODELS`/`load_tts_config` 不存在，一碰即崩；`run_mms_fa` 重复对齐逻辑。移入 archive/ | A:WS-18 + B:#17 | 低 | 低 | 净删 ~650 行 |
 | [x] | T27 | `parse_srt` 默认 `lang="ja"` 强制算罗马音：翻译路径、ref 解析白白加载 cutlet/MeCab 逐条形态素分析。默认改 `lang=None`，对齐调用方显式传 | A:WS-21 + B:#19 | 低 | 低中 | 10–20 行（需核查全部调用方） |
-| [x] | T28 | 同一文件被 ffmpeg 解码 2–3 次；`compute_type` 三处硬编码 int8。2026-07-09 修复：经探查重复仅存在于无预处理场景（2 次），改为原片预解码 16k 落临时 wav、whisper 与对齐共用（新增 `load_wav` 走 stdlib wave，torchaudio 2.10 的 load 需 torchcodec 不引入）；`--compute-type {int8,int8_float16,float16}` 参数化默认 int8，whisper 缓存键带量化档。⚠️ 行为注记：无预处理模式 whisper 输入前端改变，病理素材（BGM 压人声）转录结果可能显著变化（实测 Hathaway 从整段音乐幻觉变为真实台词，属改善），干净人声预期毫厘差异 | A:WS-22 + B(思考流) | 低→中 | 低→中 | 参数化 15–30 行；消重复解码 30–80 行 |
+| [~] | T28 | 同一文件被 ffmpeg 解码 2–3 次；`compute_type` 三处硬编码 int8。2026-07-09 处置：**参数化半项已做**（`--compute-type {int8,int8_float16,float16}` 默认 int8，whisper 缓存键带量化档）；**消重解半项做后回退**——探查发现重复仅存在于无预处理场景，而用户工作流恒开降噪（裸跑全是音乐幻觉），该场景零收益且预解码会改变 whisper 输入前端使转录结果变化，经对齐判不做。教训：探查后范围缩水应回头重新拍板。`load_wav`（stdlib wave 读取）保留为工具函数备 T41 用 | A:WS-22 + B(思考流) | 低→中 | 低→中 | 参数化 15–30 行 |
 | [ ] | T29 | 数字被删致对齐系统性偏移：`japanese_to_romaji` 送 cutlet 前删光数字，音频里数字是读出来的（"3人"→只对"人"）。**财经素材满屏数字，疑似日常影响最大的质量项**。让数字进 cutlet 转读音 | B:#23 | 中※ | 中 | 5–15 行 |
 | [ ] | T30 | 存储布局割裂：launcher 设 `WRITANSUB_HOME` 无人读；`CACHE_DIR` 无环境变量覆盖而 MODELS/LOG 有；配置走 platformdirs、模型/缓存/日志走 PROJECT_ROOT；卸载器不清理数 GB 模型残留 | B:#21b（部分 A:WS-19） | 中 | 中※※ | 20–50 行 + 安装器脚本 |
+| [ ] | T41 | **新增需求（2026-07-09 用户提出）**：wav 内存缓存模式——同一媒体分多次命令处理时，解码后的 wav 存内存复用，生存期到进程退出或显式清空。**待对齐的前提**：CLI 分开敲的多条命令是多个进程，内存不跨进程共享——目标形态需三选一：a) GUI 同进程多页复用（registry 加波形缓存）；b) CLI 常驻/守护模式（大改）；c) 退化为落盘缓存（跨进程可用，"内存"换"磁盘"）。注意与 T17（减内存驻留）方向相反，须显式开关默认关 | 用户需求 | 中 | 中 | 待对齐后估 |
 | [~] | T31 | 死代码杂项：`aitrans.py` 旧名残留、空包 core/、空目录 tmpkanji_ws/、根目录遗留配置、CLAUDE.md 死链、`cancelled` 死参数、`runner.py` 未用 `import torch`、`_log` 组装未调用、`word_results` 只写不读、`enable_start` 从不 emit、`_InfoDelegate` elide 无效 | A:WS-19 + B:#21 | 低 | 低 | 净删为主。2026-07-09 已清（根目录遗留配置移入 archive/legacy_root_configs 而非删除，内含 api_key）；`_log` 保留并由 T40 启用；`_InfoDelegate` 系在用类非死码，遗留待后续批次 |
 
 ※ T29 代码量小但必须用真实素材 A/B 验证对齐质量后再上。
