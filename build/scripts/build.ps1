@@ -98,7 +98,9 @@ try {
 }
 Push-Location $AppDir
 try {
-    & tar --force-local -xf $tar
+    # GNU tar 处理含盘符路径需 --force-local；System32 bsdtar 不认该参数但原生支持盘符
+    $tarIsGnu = ((& tar --version 2>$null | Select-Object -First 1) -match 'GNU tar')
+    if ($tarIsGnu) { & tar --force-local -xf $tar } else { & tar -xf $tar }
     if ($LASTEXITCODE) { throw "tar extract failed" }
 } finally {
     Pop-Location
