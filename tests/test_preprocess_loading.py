@@ -92,3 +92,31 @@ def test_save_load_wav_roundtrip(tmp_path):
     assert sr == 16000
     assert back.shape == wav.shape
     assert (back - wav).abs().max() < 1e-3  # 16-bit 量化误差内
+
+
+def test_silero_loader_uses_pip_package(monkeypatch):
+    """T13：_get_silero_vad 走 silero_vad 包而非 torch.hub 在线下载。"""
+    import sys
+    import types as pytypes
+    from writansub.preprocess import core
+
+    stub = pytypes.ModuleType("silero_vad")
+    stub.load_silero_vad = lambda: "MODEL"
+    stub.get_speech_timestamps = lambda *a, **k: []
+    monkeypatch.setitem(sys.modules, "silero_vad", stub)
+    monkeypatch.setattr(core, "_silero_cache", None)
+
+    model, gst = core._get_silero_vad()
+    assert model == "MODEL"
+    assert gst is stub.get_speech_timestamps
+    assert core._get_silero_vad() == (model, gst)  # 二次调用命中缓存
+
+
+def test_silero_real_load_no_network(monkeypatch):
+    """真实加载：模型随包内置，无联网必须成功；纯静音无语音段。"""
+    import torch
+    from writansub.preprocess import core
+
+    monkeypatch.setattr(core, "_silero_cache", None)
+    spans = core._run_silero_vad(torch.zeros(1, 16000))
+    assert spans == []

@@ -41,6 +41,7 @@ dependencies = [
     "imageio-ffmpeg",
     "qwen-asr",
     "demucs",
+    "silero-vad>=5.1",
     "platformdirs>=3.0.0",
 ]
 

@@ -284,12 +284,10 @@ _silero_cache: tuple[Any, Any] | None = None
 def _get_silero_vad() -> tuple[Any, Any]:
     global _silero_cache
     if _silero_cache is None:
-        model, utils = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-            trust_repo=True,
-        )
-        _silero_cache = (model, utils[0])
+        # T13: silero-vad pip 包模型内置随包分发, 加载零联网;
+        # 旧 torch.hub.load 从 GitHub 在线拉取, 国内开 VAD 必败
+        from silero_vad import load_silero_vad, get_speech_timestamps
+        _silero_cache = (load_silero_vad(), get_speech_timestamps)
     return _silero_cache
 
 
