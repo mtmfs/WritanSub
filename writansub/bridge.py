@@ -39,6 +39,21 @@ def _gpu_mem_hint(device: str) -> str:
         return ""
 
 
+def resolve_device(requested: str, log_callback=None) -> str:
+    """请求 cuda 但 CUDA 不可用时回退 cpu 并知会调用方；其余原样返回。
+
+    必须在建模型（WhisperModel / init_qwen3_model 等）之前调用——
+    transcribe() 内部的 model is None 分支生产路径不可达（T40 首修教训）。
+    """
+    if requested == "cuda":
+        import torch
+        if not torch.cuda.is_available():
+            if log_callback:
+                log_callback("CUDA 不可用，回退到 CPU")
+            return "cpu"
+    return requested
+
+
 class CancelledError(Exception):
     pass
 

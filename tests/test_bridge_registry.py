@@ -46,3 +46,21 @@ def test_pause_flag(registry):
     registry.resume()
     assert not registry.paused
     registry.checkpoint()
+
+
+def test_resolve_device_cuda_fallback(monkeypatch):
+    """T40：请求 cuda 但不可用时回退 cpu 并知会。"""
+    import torch
+    from writansub.bridge import resolve_device
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    msgs = []
+    assert resolve_device("cuda", msgs.append) == "cpu"
+    assert any("CUDA" in m for m in msgs)
+
+
+def test_resolve_device_passthrough(monkeypatch):
+    import torch
+    from writansub.bridge import resolve_device
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device("cuda") == "cuda"
+    assert resolve_device("cpu") == "cpu"

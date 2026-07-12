@@ -13,7 +13,7 @@ from writansub.align.core import (
     init_qwen3_model, run_qwen3_alignment,
 )
 from writansub.config import load_gui_state
-from writansub.bridge import ResourceRegistry, CancelledError
+from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
 from writansub.gui.widgets import (
     LogWidget, ProgressWidget, build_params_grid,
     NoScrollComboBox, GroupedComboBox, StateMixin,
@@ -276,7 +276,6 @@ class AlignmentTab(StateMixin, QWidget):
     def _run_alignment(self, audio: str, srt: str, output: str,
                        device: str, pp: dict[str, float],
                        lang: str = "ja", align_model: str = "mms_fa"):
-        import torch
         from writansub.logger import log_line
 
         reg = ResourceRegistry.instance()
@@ -287,9 +286,7 @@ class AlignmentTab(StateMixin, QWidget):
             self._log.log(msg)
 
         try:
-            if device == "cuda" and not torch.cuda.is_available():
-                log_emit("CUDA 不可用，回退到 CPU")
-                device = "cpu"
+            device = resolve_device(device, log_emit)
 
             self._progress.update_progress(0.0, "加载音频...")
             waveform = load_audio(audio)

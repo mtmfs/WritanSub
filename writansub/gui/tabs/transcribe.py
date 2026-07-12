@@ -13,7 +13,7 @@ from writansub.transcribe.core import transcribe
 from writansub.subtitle.review import generate_review, write_review_files
 from writansub.subtitle.srt_io import write_srt
 from writansub.config import PARAM_DEFS, load_gui_state, load_pp_config
-from writansub.bridge import ResourceRegistry, CancelledError
+from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, ParamSpinBox, StateMixin, bind_pp_autosave
 
 
@@ -304,6 +304,8 @@ class WhisperTab(StateMixin, QWidget):
         def log_emit(msg: str) -> None:
             log_line(msg)
             self._log.log(msg)
+
+        device = resolve_device(device, log_emit)
 
         def _w_factory():
             from faster_whisper import WhisperModel

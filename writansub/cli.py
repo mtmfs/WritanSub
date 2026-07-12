@@ -246,7 +246,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
 
 
 def cmd_transcribe(args: argparse.Namespace) -> None:
-    from writansub.bridge import ResourceRegistry, CancelledError
+    from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
     from writansub.transcribe.core import transcribe as do_transcribe
     from writansub.subtitle.srt_io import write_srt
     from writansub.subtitle.review import generate_review, write_review_files
@@ -261,13 +261,14 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     _setup_cancel_handler()
     reg = ResourceRegistry.instance()
     reg.reset_controls()
+    device = resolve_device(args.device, _log)
 
     def _w_factory():
         from faster_whisper import WhisperModel
-        return WhisperModel(args.whisper_model, device=args.device, compute_type=args.compute_type)
+        return WhisperModel(args.whisper_model, device=device, compute_type=args.compute_type)
 
     wh = reg.acquire_model(
-        f"whisper:{args.whisper_model}:{args.compute_type}", args.device, _w_factory)
+        f"whisper:{args.whisper_model}:{args.compute_type}", device, _w_factory)
     whisper_model = reg.get_model(wh)
 
     try:
@@ -278,7 +279,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
                 os.path.splitext(media)[0], "original", "whisper-" + args.whisper_model)
 
             subs, word_data = do_transcribe(
-                media, lang=args.lang, device=args.device,
+                media, lang=args.lang, device=device,
                 log_callback=_log,
                 progress_callback=_progress_bar,
                 condition_on_previous_text=not args.no_cond_prev,
@@ -304,7 +305,7 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
 
 
 def cmd_align(args: argparse.Namespace) -> None:
-    from writansub.bridge import ResourceRegistry, CancelledError
+    from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
     from writansub.subtitle.srt_io import parse_srt, write_srt
     from writansub.align.core import (
         load_audio, run_alignment, post_process, init_model,
@@ -332,11 +333,7 @@ def cmd_align(args: argparse.Namespace) -> None:
 
     model_handle = None
     try:
-        import torch
-        device = args.device
-        if device == "cuda" and not torch.cuda.is_available():
-            _log("CUDA 不可用，回退到 CPU")
-            device = "cpu"
+        device = resolve_device(args.device, _log)
 
         # 模型只加载一次，跨所有文件复用
         _log("加载对齐模型...")

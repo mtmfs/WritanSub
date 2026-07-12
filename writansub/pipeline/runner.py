@@ -3,7 +3,7 @@ import tempfile
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
-from writansub.bridge import ResourceRegistry, CancelledError
+from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
 from writansub.subtitle.srt_io import parse_srt, write_srt, populate_romaji, merge_bilingual, stage_path, lang_code
 from writansub.subtitle.review import attach_low_words, generate_review_final, write_review_files
@@ -75,6 +75,7 @@ def run_pipeline(
     sub_results: dict[str, Any] = {}
     tiger_results: dict[str, Any] = {}
 
+    cfg.device = resolve_device(cfg.device, log)
     log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} ss={cfg.ss_model} "
         f"align_model={cfg.align_model} has_ref={has_ref} skip_align={skip_align} "
         f"translate={cfg.translate} device={cfg.device}")
