@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QProgressBar, QLabel, QWidget, QVBoxLayout,
     QHBoxLayout, QDoubleSpinBox, QGridLayout, QFrame,
     QScrollArea, QComboBox, QStyledItemDelegate, QStyleOptionViewItem,
+    QStyle, QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QPalette
@@ -160,20 +161,23 @@ class _InfoDelegate(QStyledItemDelegate):
     _NAME_MAX_PX = 240
 
     def paint(self, painter, option, index):
+        # 手动展开基类 paint = initStyleOption + drawControl：
+        # 直接 super().paint(opt) 会在内部重新 initStyleOption，
+        # 用 DisplayRole 覆盖我们改过的 opt.text，elide 永远不生效（N4 根因）
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
         info = index.data(Qt.UserRole + 1) or ""
-        info_width = option.fontMetrics.horizontalAdvance(info) if info else 0
+        info_width = opt.fontMetrics.horizontalAdvance(info) if info else 0
         reserved = info_width + self._INFO_GAP + self._RIGHT_PAD if info else 0
 
-        # 给基类绘制名字的区域：原 rect 右边扣掉 info 占位
-        opt = QStyleOptionViewItem(option)
-        opt.rect = option.rect.adjusted(0, 0, -reserved, 0)
-        name = index.data(Qt.DisplayRole) or ""
+        # 给名字的区域：原 rect 右边扣掉 info 占位；过长中段省略
+        opt.rect = opt.rect.adjusted(0, 0, -reserved, 0)
         max_name_width = min(opt.rect.width(), self._NAME_MAX_PX)
-        elided = option.fontMetrics.elidedText(name, Qt.ElideMiddle, max_name_width)
-        if elided != name:
-            opt.text = elided
-            # 用 model index 的 displayText override 不方便，直接靠 super().paint 用 opt.text
-        super().paint(painter, opt, index)
+        opt.text = opt.fontMetrics.elidedText(opt.text, Qt.ElideMiddle, max_name_width)
+
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
 
         if info:
             painter.save()
