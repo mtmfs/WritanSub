@@ -2,7 +2,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget
 
 from writansub.config import load_gui_state, save_gui_state
 from writansub.gui.tabs.align import AlignmentTab
@@ -19,6 +19,19 @@ _TAB_DEFS = [
     ("强制打轴", AlignmentTab),
     ("AI 翻译", TranslateTab),
 ]
+
+
+def _confirm_quit(tabs, parent) -> bool:
+    """有任务运行中时弹确认；返回 False 表示用户放弃退出。"""
+    if not any(tab.is_running() for tab in tabs):
+        return True
+    resp = QMessageBox.question(
+        parent, "确认退出",
+        "仍有任务运行中，退出将立即终止全部任务。确定退出？",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    return resp == QMessageBox.StandardButton.Yes
 
 
 class MainWindow(QMainWindow):
@@ -44,6 +57,10 @@ class MainWindow(QMainWindow):
             self.pipeline_tab.set_media_path(initial_media)
 
     def closeEvent(self, event) -> None:
+        if not _confirm_quit(self._tabs, self):
+            event.ignore()
+            return
+
         from writansub.bridge import ResourceRegistry
 
         ResourceRegistry.instance().shutdown()

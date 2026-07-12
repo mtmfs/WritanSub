@@ -19,6 +19,11 @@ from writansub.config import (
 
 class StateMixin:
 
+    def is_running(self) -> bool:
+        """本 tab 是否有任务在跑。取消按钮可用态即运行态（_set_buttons_state 维护）。"""
+        btn = getattr(self, "_cancel_btn", None)
+        return bool(btn is not None and btn.isEnabled())
+
     def _save_now(self):
         state = load_gui_state()
         state.update(self.save_state())
