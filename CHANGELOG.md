@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [0.1.9] - 2026-07-12 批次 5
+
+### Changed
+- **镜像探测改经系统代理的 HTTPS 实测**（Clash 场景不再误判不可达，SNI 被重置不再误判可达）；探测超时 2s→5s，仅影响断网时的启动等待。
+- **silero-vad 改官方 pip 包加载**，VAD 模型随包内置、零联网——国内开 VAD（separate 模式）不再必败。
+- **关窗前确认**：有任务运行中时关窗弹确认框，拒绝则任务无损继续；确认后维持既有"立即终止"语义。
+- transcribe 全路径（CLI/GUI/流水线）请求 cuda 但不可用时自动回退 CPU 并知会（此前仅 align 有此回退）。
+- **依赖锁默认源切官方 PyPI**（清华镜像对大量 sdist/新 wheel 持续 403）；pytest/pyflakes 入锁转正，`uv sync` 不再清掉测试工具；移除 hatchling<1.31 构建钉。镜像恢复后可切回。
+
+### Removed
+- 移除无效的 `--ss-model` 参数与 GUI"分轨模型"下拉（自 tfgridnet 退役后唯一模型 tiger-speech 自动生效）。**传入 `--ss-model` 现在会报未知参数**（原为静默忽略）。
+
+### Fixed
+- 模型下拉过长名称正确中段省略，不再与右侧显存标注重叠。
+- 构建脚本自适应 GNU tar / bsdtar（纯净终端不再依赖 PATH 前置 Git 的 GNU tar）。
+
 ## [0.1.8] - 2026-07-12 批次 1~4
 
 ### Removed
