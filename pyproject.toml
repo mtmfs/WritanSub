@@ -56,17 +56,17 @@ writansub-cli = "writansub.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["writansub"]
 
-[tool.uv]
-# 清华源对新发布的 hatchling 1.31.0 wheel 返回 403（镜像未缓存），暂钉旧版；镜像恢复后可移除
-build-constraint-dependencies = ["hatchling<1.31"]
+[dependency-groups]
+dev = ["pytest", "pyflakes"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }
 
+# 2026-07-12 清华镜像对大量 sdist/新 wheel 持续 403，默认源切官方 PyPI（经系统代理）；镜像恢复后可切回
 [[tool.uv.index]]
-name = "tsinghua"
-url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+name = "pypi"
+url = "https://pypi.org/simple"
 default = true
 
 [[tool.uv.index]]
