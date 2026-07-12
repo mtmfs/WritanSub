@@ -1,12 +1,23 @@
 import os
-import socket
+import urllib.error
+import urllib.request
 
 
-def _can_reach(host: str, port: int = 443, timeout: float = 2.0) -> bool:
+def _can_reach(url: str, timeout: float = 5.0) -> bool:
+    """经系统代理的真实 HTTPS 探测。
+
+    urllib 默认读取系统代理（Windows 注册表/环境变量）并完整 TLS 握手：
+    Clash 场景不再误判不可达（旧裸 socket 不走代理），SNI 阶段被重置也
+    不再误判可达（旧探测 TCP 通即真）。收到任何 HTTP 响应（含 4xx/5xx）
+    即视为可达。
+    """
+    req = urllib.request.Request(url, method="HEAD")
     try:
-        with socket.create_connection((host, port), timeout=timeout):
+        with urllib.request.urlopen(req, timeout=timeout):
             return True
-    except OSError:
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
         return False
 
 
@@ -16,5 +27,5 @@ def setup_hf_mirror() -> None:
         return
     if os.environ.get("HF_HUB_OFFLINE"):
         return
-    if not _can_reach("huggingface.co"):
+    if not _can_reach("https://huggingface.co"):
         os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
