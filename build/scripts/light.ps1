@@ -10,9 +10,8 @@ Layout produced:
     runtime/               <- empty; install.bat fills it from vendor/python-embed.zip
     vendor/
       python-embed.zip     <- official Windows embeddable, ~10 MB (bundled so install is offline for Python itself)
-      writansub_native-<ver>-cp312-cp312-win_amd64.whl
     requirements.lock.txt
-    install.bat            <- 5-stage installer (extract Python -> patch _pth -> ensure uv -> uv pip install -> native wheel)
+    install.bat            <- 4-stage installer (extract Python -> patch _pth -> ensure uv -> uv pip install)
     README.txt
 
 Runtime structure after install.bat finishes is byte-compatible with the full bundle,
@@ -22,7 +21,6 @@ so both flavours use the same WritanSub.exe.
 [CmdletBinding()]
 param(
     [switch]$Clean,
-    [switch]$SkipNative,
     [switch]$SkipLauncher
 )
 
@@ -81,43 +79,13 @@ try {
 Remove-Item -Force $tar
 Info ("Packaged {0} source files" -f (Get-ChildItem -Recurse (Join-Path $AppDir 'writansub') -File).Count)
 
-# ---------- C3. Native wheel ----------
-if (-not $SkipNative) {
-    Step "Building writansub_native wheel"
-    $buildPy = & uv python find 3.12 2>$null
-    if (-not $buildPy -or $LASTEXITCODE) {
-        throw "No Python 3.12 found for native wheel build. 'uv python install 3.12' or python.org."
-    }
-    $buildPy = ($buildPy | Select-Object -Last 1).Trim()
-
-    Push-Location (Join-Path $RepoRoot 'native')
-    try {
-        & uv tool run --from 'maturin>=1.4.0' maturin build --release --out $VendorDir --interpreter $buildPy
-        if ($LASTEXITCODE) { throw "maturin build failed" }
-    } finally {
-        Pop-Location
-    }
-
-    $nativeCargo = Get-Content (Join-Path $RepoRoot 'native\Cargo.toml') -Raw
-    if ($nativeCargo -notmatch '(?ms)^\s*\[package\].*?^\s*version\s*=\s*"([^"]+)"') {
-        throw "Cannot parse native Cargo.toml [package] version"
-    }
-    $nativeVer = $matches[1]
-    $nativeWheel = Get-ChildItem $VendorDir -Filter "writansub_native-$nativeVer-*.whl" | Select-Object -First 1
-    if (-not $nativeWheel) {
-        throw "native wheel matching 'writansub_native-$nativeVer-*.whl' not produced"
-    }
-    Info "Native wheel: $($nativeWheel.Name)"
-}
-
-# ---------- C4. Export requirements lock ----------
+# ---------- C3. Export requirements lock ----------
 Step "Exporting requirements.lock.txt"
 $reqFile = Join-Path $LightDist 'requirements.lock.txt'
 Push-Location $RepoRoot
 try {
     & uv export --frozen --no-hashes `
         --no-emit-project `
-        --no-emit-package writansub_native `
         --format requirements-txt `
         --output-file $reqFile
     if ($LASTEXITCODE) { throw "uv export failed" }
@@ -125,7 +93,7 @@ try {
     Pop-Location
 }
 
-# ---------- C5. Bundle embeddable zip ----------
+# ---------- C4. Bundle embeddable zip ----------
 Step "Bundling Python embeddable"
 $embedZip = Join-Path $Cache "python-$PythonVer-embed-amd64.zip"
 if (-not (Test-Path $embedZip)) {
@@ -142,7 +110,7 @@ if (-not (Test-Path $embedZip)) {
 }
 Copy-Item $embedZip (Join-Path $VendorDir 'python-embed.zip') -Force
 
-# ---------- C6. Emit install.bat ----------
+# ---------- C5. Emit install.bat ----------
 Step "Emitting install.bat"
 $installBat = @'
 @echo off
@@ -155,19 +123,18 @@ echo ============================================================
 echo   WritanSub 轻量版安装程序
 echo ============================================================
 echo 本安装器会:
-echo   [1/5] 解压内嵌 Python (~10 MB)
-echo   [2/5] 配置 runtime
-echo   [3/5] 检查并安装 uv (Python 包管理器)
-echo   [4/5] 从清华/官方镜像下载依赖 (~4 GB, 10-30 分钟)
-echo   [5/5] 安装 native 扩展
+echo   [1/4] 解压内嵌 Python (~10 MB)
+echo   [2/4] 配置 runtime
+echo   [3/4] 检查并安装 uv (Python 包管理器)
+echo   [4/4] 从清华/官方镜像下载依赖 (~4 GB, 10-30 分钟)
 echo.
 echo 确保网络畅通。断网或镜像被屏蔽会触发镜像回退。
 echo.
 pause
 
-:: -------- [1/5] 解压 embeddable --------
+:: -------- [1/4] 解压 embeddable --------
 echo.
-echo [1/5] 解压内嵌 Python ...
+echo [1/4] 解压内嵌 Python ...
 if exist "runtime\python.exe" (
     echo     runtime\python.exe 已存在, 跳过解压.
 ) else (
@@ -180,9 +147,9 @@ if exist "runtime\python.exe" (
     )
 )
 
-:: -------- [2/5] 配置 ._pth + site-packages --------
+:: -------- [2/4] 配置 ._pth + site-packages --------
 echo.
-echo [2/5] 配置 runtime ...
+echo [2/4] 配置 runtime ...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$f = Get-ChildItem 'runtime' -Filter 'python*._pth' | Select-Object -First 1; if (-not $f) { Write-Error 'no _pth'; exit 1 }; Set-Content $f.FullName -Value \"python312.zip`n.`nLib\site-packages`n..\app`nimport site\" -Encoding ASCII; New-Item -ItemType Directory -Force -Path 'runtime\Lib\site-packages' | Out-Null"
 if errorlevel 1 (
@@ -191,9 +158,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: -------- [3/5] 确保 uv 可用 --------
+:: -------- [3/4] 确保 uv 可用 --------
 echo.
-echo [3/5] 检查 uv ...
+echo [3/4] 检查 uv ...
 where uv >nul 2>nul
 if errorlevel 1 (
     echo     未检测到 uv, 正在从 astral.sh 安装 ...
@@ -208,9 +175,9 @@ if errorlevel 1 (
     echo     uv 已就绪.
 )
 
-:: -------- [4/5] 装依赖 (3 次重试, 清华→官方 镜像回退) --------
+:: -------- [4/4] 装依赖 (3 次重试, 清华→官方 镜像回退) --------
 echo.
-echo [4/5] 下载并安装依赖 (约 4 GB) ...
+echo [4/4] 下载并安装依赖 (约 4 GB) ...
 set "MIRROR_TSINGHUA=https://pypi.tuna.tsinghua.edu.cn/simple"
 set "MIRROR_PYPI=https://pypi.org/simple"
 set "TORCH_INDEX=https://download.pytorch.org/whl/cu128"
@@ -242,21 +209,6 @@ if errorlevel 1 (
     goto retry_install
 )
 
-:: -------- [5/5] native 扩展 --------
-echo.
-echo [5/5] 安装 native 扩展 ...
-for %%f in ("vendor\writansub_native-*.whl") do (
-    call uv pip install ^
-        --python "runtime\python.exe" ^
-        --target "runtime\Lib\site-packages" ^
-        --reinstall --no-deps "%%f"
-    if errorlevel 1 (
-        echo native 扩展安装失败.
-        pause
-        exit /b 1
-    )
-)
-
 echo.
 echo ============================================================
 echo   安装完成! 双击 WritanSub.exe 启动 GUI.
@@ -271,7 +223,7 @@ $installBatCrlf = $installBat -replace "(?<!`r)`n", "`r`n"
     [System.Text.Encoding]::GetEncoding(936)
 )
 
-# ---------- C7. README ----------
+# ---------- C6. README ----------
 $readme = @"
 WritanSub 轻量版 ($version)
 ==============================

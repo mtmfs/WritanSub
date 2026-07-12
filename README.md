@@ -52,7 +52,7 @@ WritanSub 把「做字幕」这件事拆成了几个自动化的步骤。你只�
 
 ### 第二步：安装软件环境
 
-**方法一：使用 uv（推荐，更快更稳）**
+本项目使用 uv 管理环境（唯一官方安装方式）：
 
 1. 按 `Win + R`，输入 `cmd`，回车，打开黑框框（命令提示符）
 2. 输入下面命令安装 uv：
@@ -69,18 +69,6 @@ WritanSub 把「做字幕」这件事拆成了几个自动化的步骤。你只�
    uv sync
    ```
    这一步会自动下载 Python 依赖和模型库，可能要 10~30 分钟，取决于网速。
-
-**方法二：使用普通 pip**
-
-如果你不想装 uv，也可以：
-
-```bash
-cd /d D:\WritanSub
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
 
 ### 第三步：启动 GUI 并跑第一个视频
 
@@ -118,7 +106,7 @@ pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 ## 安装
 
-### 方法 A：uv 安装（推荐）
+### uv 安装（唯一官方方式）
 
 ```bash
 # 1. 安装 uv
@@ -140,33 +128,6 @@ uv run python -m writansub
 
 # CLI 模式
 uv run writansub-cli --help
-```
-
-### 方法 B：pip 安装
-
-```bash
-# 1. 进入项目目录
-cd WritanSub
-
-# 2. 创建虚拟环境
-python -m venv .venv
-
-# 3. 激活环境（Windows）
-.venv\Scripts\activate
-
-# 4. 安装依赖（注意：必须带 requirements.txt，否则可能装成 CPU 版 PyTorch）
-pip install -r requirements.txt
-pip install -e .
-```
-
-**安装后怎么启动？**
-
-```bash
-# GUI 模式
-python -m writansub
-
-# CLI 模式
-writansub-cli --help
 ```
 
 ### Windows 快捷启动
@@ -556,8 +517,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 **解决**：
 1. 确认 `pip install uv` 执行成功
-2. 如果还是找不到，用 pip 方式安装（方法 B）
-3. 或者去 [uv 官方 GitHub Releases](https://github.com/astral-sh/uv/releases) 下载 `uv-x86_64-pc-windows-msvc.zip`，把 `uv.exe` 放到 `WritanSub` 文件夹里，再运行 `uv sync`
+2. 如果还是找不到，去 [uv 官方 GitHub Releases](https://github.com/astral-sh/uv/releases) 下载 `uv-x86_64-pc-windows-msvc.zip`，把 `uv.exe` 放到 `WritanSub` 文件夹里，再运行 `uv sync`
 
 #### Q2：安装 PyTorch 时提示 `No matching distribution found`
 
@@ -566,20 +526,15 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 **解决**：
 1. 确认 Python 版本是 **3.12**（`python --version`）
 2. 确认是 64 位 Windows
-3. 如果显卡很老（GTX 750 Ti 等），不支持 CUDA 12，改用 CPU 版：把 `requirements.txt` 里带 `cu128` 或 `cu124` 的行删掉，换成 `torch torchvision torchaudio`
+3. 如果显卡很老（GTX 750 Ti 等），不支持 CUDA 12，改用 CPU 版：把 `pyproject.toml` 里 torch/torchaudio 的 `pytorch-cu128` 索引配置删掉，重新 `uv sync`
 
 #### Q3：安装时卡住不动，或下载速度极慢
 
 **原因**：国内访问 PyPI 或 Hugging Face 较慢。
 
 **解决**：
-1. **uv 用户**：项目已默认配置清华大学 PyPI 镜像（`pyproject.toml`），`uv sync` 会自动走国内源，无需手动设置。
-2. **pip 用户**：安装时加上清华镜像参数：
-   ```bash
-   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-   pip install -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
-   ```
-3. Hugging Face 模型下载由程序自动处理镜像，安装阶段不需要担心
+1. 项目已默认配置清华大学 PyPI 镜像（`pyproject.toml`），`uv sync` 会自动走国内源，无需手动设置。
+2. Hugging Face 模型下载由程序自动处理镜像，安装阶段不需要担心
 
 ---
 
@@ -595,8 +550,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
    cd /d D:\WritanSub
    uv run python -m writansub
    ```
-2. 如果报错 `ModuleNotFoundError: No module named 'xxx'`，说明依赖没装全，重新执行 `uv sync` 或 `pip install -r requirements.txt`
-3. 如果报错和 `writansub_native` 有关，说明 Rust 扩展没编译。进入 `native` 目录运行 `maturin develop`（需要安装 Rust 工具链）
+2. 如果报错 `ModuleNotFoundError: No module named 'xxx'`，说明依赖没装全，重新执行 `uv sync`
 
 #### Q5：提示 `CUDA out of memory`（显存不足）
 
@@ -694,15 +648,12 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 ## 开发
 
-本项目包含一个 Rust 原生扩展（`native/`），用于进程管理与模型资源注册。
-
 主要技术栈：
 
 - Python 3.12 + PySide6（GUI）
 - faster-whisper（语音识别）
 - torchaudio + MMS_FA / Qwen3（强制对齐）
 - TIGER / Demucs（音频预处理）
-- Rust + PyO3 + maturin（原生扩展）
 
 ---
 
@@ -714,7 +665,7 @@ WritanSub/
 │   ├── types.py              # 公共数据类型、常量
 │   ├── paths.py              # 统一路径管理
 │   ├── config.py             # 配置读写
-│   ├── bridge.py             # Rust FFI 桥接层
+│   ├── bridge.py             # 进程与模型资源管理（子进程/取消/暂停）
 │   ├── preprocess/           # TIGER 音频预处理
 │   ├── transcribe/           # Whisper 语音识别
 │   ├── align/                # MMS_FA / Qwen3 强制打轴
@@ -723,7 +674,6 @@ WritanSub/
 │   ├── pipeline/             # 流水线编排
 │   ├── gui/                  # PySide6 界面
 │   └── vendor/tiger/         # 第三方 TIGER 模型代码
-├── native/                   # Rust 原生扩展
 ├── pyproject.toml
 ├── requirements.txt
 ├── WritanSub.bat             # Windows GUI 启动脚本

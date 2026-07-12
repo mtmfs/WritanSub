@@ -1,3 +1,4 @@
+# 仅供参考——官方安装与依赖锁定以 uv (pyproject.toml / uv.lock) 为准
 --extra-index-url https://download.pytorch.org/whl/cu128
 torch==2.10.0+cu128
 torchaudio==2.10.0+cu128

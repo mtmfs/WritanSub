@@ -16,7 +16,6 @@ no redirector exes, no base Python required on target machines.
 
 [CmdletBinding()]
 param(
-    [switch]$SkipNative,
     [switch]$SkipLauncher,
     [switch]$Clean,
     [switch]$SkipSmoke
@@ -30,10 +29,9 @@ $DistRoot  = Join-Path $BuildRoot 'dist'
 $AppDist   = Join-Path $DistRoot 'WritanSub'
 $Runtime   = Join-Path $AppDist 'runtime'
 $AppDir    = Join-Path $AppDist 'app'
-$Wheels    = Join-Path $BuildRoot 'wheels'
 $ReqFile   = Join-Path $BuildRoot 'requirements.lock.txt'
 
-# rustup toolchain bin for cargo / maturin
+# rustup toolchain bin for cargo (launcher build)
 $RustupBin = Join-Path $env:USERPROFILE '.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin'
 if ((Test-Path $RustupBin) -and ($env:PATH -notlike "*$RustupBin*")) {
     $env:PATH = "$RustupBin;$env:PATH"
@@ -68,7 +66,6 @@ Push-Location $RepoRoot
 try {
     & uv export --frozen --no-hashes `
         --no-emit-project `
-        --no-emit-package writansub_native `
         --format requirements-txt `
         --output-file $ReqFile
     if ($LASTEXITCODE) { throw "uv export failed" }
@@ -86,49 +83,7 @@ Step "Installing dependencies into embeddable runtime"
     -r $ReqFile
 if ($LASTEXITCODE) { throw "uv pip install into embeddable failed" }
 
-# ---------- B4. Native extension wheel ----------
-if (-not $SkipNative) {
-    Step "Building writansub_native wheel (maturin)"
-    if (Test-Path $Wheels) { Remove-Item -Recurse -Force $Wheels }
-    New-Item -ItemType Directory -Force -Path $Wheels | Out-Null
-
-    # Embeddable Python lacks libs/pythonXX.lib, so maturin cannot link against it.
-    # Use a full Python 3.12 (system or uv-managed) for compilation only — the
-    # resulting cp312/win_amd64 wheel is ABI-compatible with the embeddable runtime.
-    $buildPy = & uv python find 3.12 2>$null
-    if (-not $buildPy -or $LASTEXITCODE) {
-        throw "No Python 3.12 found for native wheel build. Install one: 'uv python install 3.12' or python.org."
-    }
-    $buildPy = ($buildPy | Select-Object -Last 1).Trim()
-    Info "Build-time Python: $buildPy"
-
-    Push-Location (Join-Path $RepoRoot 'native')
-    try {
-        & uv tool run --from 'maturin>=1.4.0' maturin build --release --out $Wheels `
-            --interpreter $buildPy
-        if ($LASTEXITCODE) { throw "maturin build failed" }
-    } finally {
-        Pop-Location
-    }
-
-    # Expected wheel filename uses native's own version (e.g. 0.1.7), not pyproject's (0.1.7.3)
-    $nativeCargo = Get-Content (Join-Path $RepoRoot 'native\Cargo.toml') -Raw
-    if ($nativeCargo -notmatch '(?ms)^\s*\[package\].*?^\s*version\s*=\s*"([^"]+)"') {
-        throw "Cannot parse native Cargo.toml [package] version"
-    }
-    $nativeVer = $matches[1]
-    $expected = "writansub_native-$nativeVer-*.whl"
-    $nativeWheel = Get-ChildItem $Wheels -Filter $expected | Select-Object -First 1
-    if (-not $nativeWheel) {
-        throw "native wheel matching '$expected' not produced in $Wheels (stale cached build?)"
-    }
-    Info "Native wheel: $($nativeWheel.Name)"
-
-    & uv pip install --python $runtimePython --reinstall --no-deps $nativeWheel.FullName
-    if ($LASTEXITCODE) { throw "native wheel install failed" }
-}
-
-# ---------- B5. App source via git archive ----------
+# ---------- B4. App source via git archive ----------
 Step "Exporting tracked source via git archive"
 New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
 $tar = Join-Path $BuildRoot 'app-source.tar'
@@ -152,7 +107,7 @@ Remove-Item -Force $tar
 $srcCount = (Get-ChildItem -Recurse (Join-Path $AppDir 'writansub') -File).Count
 Info "Packaged $srcCount source files from HEAD"
 
-# ---------- B6. Rust launcher exes ----------
+# ---------- B5. Rust launcher exes ----------
 if (-not $SkipLauncher) {
     Step "Building Rust launcher"
     Push-Location (Join-Path $BuildRoot 'launcher')
@@ -169,7 +124,7 @@ Copy-Item -Force (Join-Path $launcherRelease 'WritanSub.exe')    (Join-Path $App
 Copy-Item -Force (Join-Path $launcherRelease 'WritanSubCLI.exe') (Join-Path $AppDist 'WritanSubCLI.exe')
 Info "Launchers copied to $AppDist"
 
-# ---------- B7. Prune runtime ----------
+# ---------- B6. Prune runtime ----------
 Step "Pruning runtime to reduce size"
 # __pycache__
 Get-ChildItem -Recurse $sitePkg -Directory -Force -Filter '__pycache__' -ErrorAction SilentlyContinue |
@@ -194,7 +149,7 @@ foreach ($sub in @('test','include')) {
     if (Test-Path $p) { Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue }
 }
 
-# ---------- B8. Smoke test ----------
+# ---------- B7. Smoke test ----------
 if (-not $SkipSmoke) {
     Step "Running smoke test against built runtime"
 

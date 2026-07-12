@@ -2923,7 +2923,6 @@ dependencies = [
     { name = "torchaudio" },
     { name = "unidecode" },
     { name = "unidic-lite" },
-    { name = "writansub-native" },
 ]
 
 [package.metadata]
@@ -2945,10 +2944,4 @@ requires-dist = [
     { name = "torchaudio", specifier = "==2.10.0", index = "https://download.pytorch.org/whl/cu128" },
     { name = "unidecode" },
     { name = "unidic-lite" },
-    { name = "writansub-native", directory = "native" },
 ]
-
-[[package]]
-name = "writansub-native"
-version = "0.1.7"
-source = { directory = "native" }

@@ -21,7 +21,6 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Rust",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
     "Topic :: Text Processing :: Linguistic",
 ]
@@ -42,7 +41,6 @@ dependencies = [
     "imageio-ffmpeg",
     "qwen-asr",
     "demucs",
-    "writansub_native",
     "platformdirs>=3.0.0",
 ]
 
@@ -65,7 +63,6 @@ build-constraint-dependencies = ["hatchling<1.31"]
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }
-writansub_native = { path = "./native" }
 
 [[tool.uv.index]]
 name = "tsinghua"

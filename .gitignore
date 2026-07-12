@@ -39,9 +39,6 @@ push.bat
 push_pyside6.bat
 *.fast.bat
 
-# Rust 编译产物
-native/target/
-
 # 模型缓存
 cache/
 
