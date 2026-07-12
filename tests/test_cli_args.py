@@ -32,3 +32,16 @@ def test_pipeline_config_defaults():
     assert cfg.compute_type == "int8"
     assert cfg.overlap_mode == "merge"
     assert cfg.bilingual is True
+
+
+def test_ss_model_flag_removed():
+    """N3：--ss-model 死参数已拆，传入应报未知参数而非静默忽略。"""
+    import pytest
+    for cmd in ("pipeline", "preprocess"):
+        with pytest.raises(SystemExit):
+            build_parser().parse_args([cmd, "x.mp4", "--ss-model", "tiger-speech"])
+
+
+def test_pipeline_config_has_no_ss_model():
+    from writansub.pipeline.runner import PipelineConfig
+    assert not hasattr(PipelineConfig(), "ss_model")

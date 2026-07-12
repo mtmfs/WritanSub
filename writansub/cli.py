@@ -164,7 +164,6 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         initial_prompt=args.initial_prompt,
         tiger_mode=tiger_mode,
         mss_model=args.mss_model,
-        ss_model=args.ss_model,
         save_intermediate=args.save_intermediate,
         overlap_mode=args.overlap_mode,
         ref_srt=args.ref_srt,
@@ -234,7 +233,6 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
             run_speech_batch(
                 tiger_results, device=args.device,
                 save_intermediate=True,
-                ss_model=args.ss_model,
                 log_callback=_log, progress_callback=_spk_p,
             )
 
@@ -457,7 +455,6 @@ def build_parser() -> argparse.ArgumentParser:
     g_tiger.add_argument("--denoise", action="store_true", help="启用 DnR 降噪")
     g_tiger.add_argument("--separate", action="store_true", help="启用说话人分离 (含降噪)")
     g_tiger.add_argument("--mss-model", default="tiger-dnr", help="降噪模型 (默认: tiger-dnr)")
-    g_tiger.add_argument("--ss-model", default="tiger-speech", help="分轨模型 (默认: tiger-speech)")
     g_tiger.add_argument("--save-intermediate", action="store_true", help="保存中间音轨")
     g_tiger.add_argument("--overlap-mode", default="merge", choices=["merge", "keep"],
                          help="separate 模式重叠处理: merge=压成一句(- A / - B), keep=保留双条重叠")
@@ -487,7 +484,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre.add_argument("--denoise", action="store_true", help="启用 DnR 降噪")
     p_pre.add_argument("--separate", action="store_true", help="启用说话人分离 (含降噪)")
     p_pre.add_argument("--mss-model", default="tiger-dnr", help="降噪模型 (默认: tiger-dnr)")
-    p_pre.add_argument("--ss-model", default="tiger-speech", help="分轨模型 (默认: tiger-speech)")
     p_pre.set_defaults(func=cmd_preprocess)
 
     # ── transcribe ──

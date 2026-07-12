@@ -42,12 +42,6 @@ MSS_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
 ]
 
-SS_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
-    ("TIGER", [
-        ("tiger-speech", "~1 GB"),
-    ]),
-]
-
 ALIGN_MODELS: list[tuple[str, list[tuple[str, str]]]] = [
     ("torchaudio", [
         ("mms_fa", "~2 GB"),

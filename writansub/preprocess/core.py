@@ -403,7 +403,6 @@ def run_speech_batch(
     device: str = "cpu",
     cache_dir: str = "",
     save_intermediate: bool = False,
-    ss_model: str = "tiger-speech",
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> None:

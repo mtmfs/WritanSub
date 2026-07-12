@@ -25,7 +25,6 @@ class PipelineConfig:
     initial_prompt: str | None = None
     tiger_mode: str | None = None       # None | "denoise" | "separate"
     mss_model: str = "tiger-dnr"
-    ss_model: str = "tiger-speech"
     overlap_mode: str = "merge"         # separate 模式重叠: merge=压成一句 / keep=保留双条
     save_intermediate: bool = False
     keep_whisper_srt: bool = False
@@ -76,7 +75,7 @@ def run_pipeline(
     tiger_results: dict[str, Any] = {}
 
     cfg.device = resolve_device(cfg.device, log)
-    log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} ss={cfg.ss_model} "
+    log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} "
         f"align_model={cfg.align_model} has_ref={has_ref} skip_align={skip_align} "
         f"translate={cfg.translate} device={cfg.device}")
     log(f"[决策] whisper={cfg.whisper_model} lang={cfg.lang} "
@@ -331,7 +330,6 @@ def _run_tiger_phase(
 
         run_speech_batch(
             tiger_results, device=cfg.device, save_intermediate=cfg.save_intermediate,
-            ss_model=cfg.ss_model,
             log_callback=log, progress_callback=_spk_p,
         )
 

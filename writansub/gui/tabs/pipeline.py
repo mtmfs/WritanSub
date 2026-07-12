@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject
 
-from writansub.types import LANGUAGES, WHISPER_MODELS, ALIGN_MODELS, MSS_MODELS, SS_MODELS
+from writansub.types import LANGUAGES, WHISPER_MODELS, ALIGN_MODELS, MSS_MODELS
 from writansub.config import load_gui_state, load_translate_config
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import (
@@ -142,14 +142,6 @@ class PipelineTab(StateMixin, QWidget):
         self._chk_tiger_separate.stateChanged.connect(self._on_tiger_separate_changed)
         tiger_layout.addWidget(self._chk_tiger_separate)
 
-        ss_row = QHBoxLayout()
-        ss_row.addWidget(QLabel("分轨模型:"))
-        self._ss_model_combo = GroupedComboBox()
-        self._ss_model_combo.set_grouped_items(SS_MODELS)
-        self._ss_model_combo.setCurrentName("tiger-speech")
-        ss_row.addWidget(self._ss_model_combo)
-        tiger_layout.addLayout(ss_row)
-
         self._chk_tiger_save = QCheckBox("保存中间音轨")
         tiger_layout.addWidget(self._chk_tiger_save)
         tiger_layout.addStretch()
@@ -257,7 +249,6 @@ class PipelineTab(StateMixin, QWidget):
         self._chk_tiger_denoise.stateChanged.connect(self._auto_save)
         self._mss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_tiger_separate.stateChanged.connect(self._auto_save)
-        self._ss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_tiger_save.stateChanged.connect(self._auto_save)
         self._chk_ref_sub.stateChanged.connect(self._auto_save)
         self._chk_ref_direct.stateChanged.connect(self._auto_save)
@@ -278,7 +269,6 @@ class PipelineTab(StateMixin, QWidget):
             "pipeline.tiger_denoise": self._chk_tiger_denoise.isChecked(),
             "pipeline.mss_model": self._mss_model_combo.currentName(),
             "pipeline.tiger_separate": self._chk_tiger_separate.isChecked(),
-            "pipeline.ss_model": self._ss_model_combo.currentName(),
             "pipeline.tiger_save": self._chk_tiger_save.isChecked(),
             "pipeline.ref_sub": self._chk_ref_sub.isChecked(),
             "pipeline.ref_srt_path": self._ref_srt_path,
@@ -315,8 +305,6 @@ class PipelineTab(StateMixin, QWidget):
             self._mss_model_combo.setCurrentName(state["pipeline.mss_model"])
         if "pipeline.tiger_separate" in state:
             self._chk_tiger_separate.setChecked(state["pipeline.tiger_separate"])
-        if "pipeline.ss_model" in state:
-            self._ss_model_combo.setCurrentName(state["pipeline.ss_model"])
         if "pipeline.tiger_save" in state:
             self._chk_tiger_save.setChecked(state["pipeline.tiger_save"])
         if "pipeline.ref_sub" in state:
@@ -453,7 +441,6 @@ class PipelineTab(StateMixin, QWidget):
             initial_prompt=self._prompt_edit.text().strip() or None,
             tiger_mode=self._resolve_tiger_mode(),
             mss_model=self._mss_model_combo.currentName(),
-            ss_model=self._ss_model_combo.currentName(),
             save_intermediate=self._chk_tiger_save.isChecked(),
             ref_srt=self._ref_srt_path or None,
             use_ref_sub=self._chk_ref_sub.isChecked(),

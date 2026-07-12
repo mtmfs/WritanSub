@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Signal, QObject, Qt
 
-from writansub.types import MEDIA_FILETYPES, MSS_MODELS, SS_MODELS
+from writansub.types import MEDIA_FILETYPES, MSS_MODELS
 from writansub.config import load_gui_state
 from writansub.bridge import ResourceRegistry, CancelledError
 from writansub.gui.widgets import LogWidget, ProgressWidget, NoScrollComboBox, GroupedComboBox, StateMixin, remove_selected_rows
@@ -89,12 +89,6 @@ class TigerTab(StateMixin, QWidget):
         self._chk_separate.stateChanged.connect(self._on_separate_changed)
         tiger_layout.addWidget(self._chk_separate)
 
-        tiger_layout.addWidget(QLabel("分轨模型"))
-        self._ss_model_combo = GroupedComboBox()
-        self._ss_model_combo.set_grouped_items(SS_MODELS)
-        self._ss_model_combo.setCurrentName("tiger-speech")
-        tiger_layout.addWidget(self._ss_model_combo)
-
         tiger_layout.addWidget(QLabel("设备"))
         self._device_combo = NoScrollComboBox()
         self._device_combo.addItems(["cuda", "cpu"])
@@ -151,7 +145,6 @@ class TigerTab(StateMixin, QWidget):
         self._chk_denoise.stateChanged.connect(self._auto_save)
         self._mss_model_combo.currentTextChanged.connect(self._auto_save)
         self._chk_separate.stateChanged.connect(self._auto_save)
-        self._ss_model_combo.currentTextChanged.connect(self._auto_save)
         self._device_combo.currentTextChanged.connect(self._auto_save)
         self._chk_save.stateChanged.connect(self._auto_save)
 
@@ -160,7 +153,6 @@ class TigerTab(StateMixin, QWidget):
             "tiger.denoise": self._chk_denoise.isChecked(),
             "tiger.mss_model": self._mss_model_combo.currentName(),
             "tiger.separate": self._chk_separate.isChecked(),
-            "tiger.ss_model": self._ss_model_combo.currentName(),
             "tiger.device": self._device_combo.currentText(),
             "tiger.save": self._chk_save.isChecked(),
             "tiger.files": list(self._media_files),
@@ -173,8 +165,6 @@ class TigerTab(StateMixin, QWidget):
             self._mss_model_combo.setCurrentName(state["tiger.mss_model"])
         if "tiger.separate" in state:
             self._chk_separate.setChecked(state["tiger.separate"])
-        if "tiger.ss_model" in state:
-            self._ss_model_combo.setCurrentName(state["tiger.ss_model"])
         if "tiger.device" in state:
             self._device_combo.setCurrentText(state["tiger.device"])
         if "tiger.save" in state:
@@ -254,19 +244,18 @@ class TigerTab(StateMixin, QWidget):
 
         mss_model = self._mss_model_combo.currentName()
         do_separate = self._chk_separate.isChecked()
-        ss_model = self._ss_model_combo.currentName()
         save_intermediate = self._chk_save.isChecked()
         device = self._device_combo.currentText()
 
         thread = threading.Thread(
             target=self._run_tiger,
-            args=(list(self._media_files), mss_model, do_separate, ss_model, save_intermediate, device),
+            args=(list(self._media_files), mss_model, do_separate, save_intermediate, device),
             daemon=True,
         )
         thread.start()
 
     def _run_tiger(self, media_files: list[str], mss_model: str, do_separate: bool,
-                   ss_model: str, save_intermediate: bool, device: str):
+                   save_intermediate: bool, device: str):
         from writansub.preprocess.core import run_dnr_batch, run_speech_batch
         from writansub.logger import log_line
 
@@ -303,7 +292,6 @@ class TigerTab(StateMixin, QWidget):
                     tiger_results,
                     device=device,
                     save_intermediate=save_intermediate,
-                    ss_model=ss_model,
                     log_callback=log,
                     progress_callback=_spk_progress,
                 )
