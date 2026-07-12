@@ -11,8 +11,6 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
-import writansub_native
-
 if TYPE_CHECKING:
     import torch
 
@@ -71,6 +69,12 @@ def _get_ffprobe() -> str:
         )
     return candidate
 
+
+# Windows 下子进程不建控制台窗口(GUI/pythonw 场景防闪黑框);
+# 代价是子进程收不到控制台 Ctrl+C——取消一律走显式 kill(cancelled setter)
+_CREATE_NO_WINDOW = 0x0800_0000
+
+
 class ResourceRegistry:
     _instance: "ResourceRegistry | None" = None
     _instance_lock = threading.Lock()
@@ -84,12 +88,36 @@ class ResourceRegistry:
             return cls._instance
 
     def __init__(self) -> None:
-        # 使用底层原生 Registry 类（类级 API，非实例）
-        self._native = writansub_native.ResourceRegistry
+        self._lock = threading.Lock()
+        self._next_handle = 1
+        self._models: dict[int, Any] = {}
         self._model_handles: dict[tuple[str, str], int] = {}
-        self.cancelled = False
+        self._procs: set[subprocess.Popen] = set()
+        self._cancelled = False
         self._pause_event = threading.Event()
         self._pause_event.set()
+
+    # ── 取消 / 暂停 ──
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    @cancelled.setter
+    def cancelled(self, value: bool) -> None:
+        # 置 True 即杀活子进程：解码/提取中的取消从"等 ffmpeg 跑完"变即时
+        self._cancelled = value
+        if value:
+            self._kill_procs()
+
+    def _kill_procs(self) -> None:
+        with self._lock:
+            procs = list(self._procs)
+        for p in procs:
+            try:
+                p.kill()
+            except OSError:
+                pass
 
     def pause(self) -> None:
         self._pause_event.clear()
@@ -102,34 +130,40 @@ class ResourceRegistry:
         return not self._pause_event.is_set()
 
     def reset_controls(self) -> None:
-        self.cancelled = False
+        self._cancelled = False
         self._pause_event.set()
 
     def checkpoint(self) -> None:
         self._pause_event.wait()
-        if self.cancelled:
+        if self._cancelled:
             raise CancelledError("任务已取消")
+
+    # ── 模型注册表 ──
 
     def register_model(self, name: str, obj: Any, device: str = "") -> int:
         from writansub.logger import log_line
-        handle = self._native.register_model(obj)
-        self._model_handles[(name, device)] = handle
+        with self._lock:
+            handle = self._next_handle
+            self._next_handle += 1
+            self._models[handle] = obj
+            self._model_handles[(name, device)] = handle
         log_line(f"[model] registered name={name!r} device={device!r} handle={handle}{_gpu_mem_hint(device)}")
         return handle
 
     def acquire_model(self, name: str, device: str, factory: Callable[[], Any]) -> int:
         from writansub.logger import log_line
         key = (name, device)
-        if key in self._model_handles:
-            handle = self._model_handles[key]
-            # 尝试在原生层获取，如果失败（可能被 unload 了），则重新加载
-            try:
-                self._native.get_model(handle)
-                log_line(f"[model] reuse cached name={name!r} device={device!r} handle={handle}")
-                return handle
-            except Exception as e:
-                log_line(f"[model] cached handle={handle} invalid for {name!r}: {e!r}, reloading")
-                del self._model_handles[key]
+        with self._lock:
+            handle = self._model_handles.get(key)
+            if handle is not None and handle in self._models:
+                cached = handle
+            else:
+                cached = None
+                if handle is not None:
+                    del self._model_handles[key]
+        if cached is not None:
+            log_line(f"[model] reuse cached name={name!r} device={device!r} handle={cached}")
+            return cached
 
         log_line(f"[model] loading name={name!r} device={device!r} ...{_gpu_mem_hint(device)}")
         t0 = time.monotonic()
@@ -147,54 +181,55 @@ class ResourceRegistry:
         return self.register_model(name, obj, device)
 
     def get_model(self, handle: int) -> Any:
-        return self._native.get_model(handle)
+        with self._lock:
+            if handle not in self._models:
+                raise KeyError(f"model handle {handle} not found")
+            return self._models[handle]
 
     def release_model(self, handle: int) -> None:
+        # 兼容 API：native 时代的 in_use 标志 Python 侧从未消费，退役后仅留日志
         from writansub.logger import log_line
-        self._native.release_model(handle)
         log_line(f"[model] released handle={handle}")
 
     def unload_model(self, handle: int) -> None:
         from writansub.logger import log_line
-        key = next((k for k, v in self._model_handles.items() if v == handle), None)
-        device = key[1] if key else ""
+        with self._lock:
+            key = next((k for k, v in self._model_handles.items() if v == handle), None)
+            device = key[1] if key else ""
+            self._models.pop(handle, None)
+            self._model_handles = {k: v for k, v in self._model_handles.items() if v != handle}
         log_line(f"[model] unloading handle={handle} key={key}{_gpu_mem_hint(device)}")
-        self._native.unload_model(handle)
-        self._model_handles = {k: v for k, v in self._model_handles.items() if v != handle}
         gc.collect()
         log_line(f"[model] unloaded handle={handle}{_gpu_mem_hint(device)}")
 
+    # ── 子进程 ──
+
     def run_subprocess(self, cmd: list[str], timeout: float = 600) -> subprocess.CompletedProcess:
-        handle = self._native.spawn_process(cmd)
-        result: list[tuple[int, Any, Any]] = []
-        error: list[BaseException] = []
-
-        def _wait():
+        creationflags = _CREATE_NO_WINDOW if os.name == "nt" else 0
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=creationflags,
+        )
+        with self._lock:
+            self._procs.add(proc)
+        try:
             try:
-                result.append(self._native.wait_process(handle))
-            except Exception as e:
-                error.append(e)
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise TimeoutError(f"子进程超时 ({timeout}s): {cmd[0]}") from None
+        finally:
+            with self._lock:
+                self._procs.discard(proc)
 
-        t = threading.Thread(target=_wait, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
+        # 取消触发的 kill：返回码必非零，按取消上抛，调用方不得误报"执行失败"
+        if self._cancelled and proc.returncode != 0:
+            raise CancelledError("任务已取消")
 
-        if t.is_alive():
-            # 超时，强制终止
-            self._native.shutdown()
-            raise TimeoutError(f"子进程超时 ({timeout}s): {cmd[0]}")
-
-        if error:
-            raise error[0]
-
-        code, stdout, stderr = result[0]
-
-        # Rust 层返回 list[int]，转换为 Python bytes
-        if isinstance(stdout, list):
-            stdout = bytes(stdout)
-        if isinstance(stderr, list):
-            stderr = bytes(stderr)
-
+        code = proc.returncode
         if stderr:
             try:
                 from writansub.logger import log_line
@@ -230,7 +265,9 @@ class ResourceRegistry:
         return waveform, sample_rate
 
     def shutdown(self) -> None:
-        log.info("Native Shutdown Initiated...")
-        self.cancelled = True
+        log.info("Shutdown initiated...")
+        self.cancelled = True  # property：顺带 kill 所有活子进程
         self._pause_event.set()
-        self._native.shutdown()
+        with self._lock:
+            self._models.clear()
+            self._model_handles.clear()
