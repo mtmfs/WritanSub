@@ -5,9 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [Unreleased] - 2026-07-09 批次 1~3
+## [0.1.8] - 2026-07-12 批次 1~4
+
+### Removed
+- **Rust 原生扩展 `writansub_native` 整层退役**，由 bridge.py 纯 Python 实现替换（对外 API 不变）：
+  - GUI 在解码/字幕提取期间不再冻结（原 GIL 持锁病灶）
+  - 子进程超时与取消**首次真实生效**：取消即时终止 ffmpeg（实测延迟 <0.1s），Ctrl+C 不再遗留孤儿进程
+  - 1h 音频解码内存峰值大幅下降（消除字节流→int 列表转换）
+  - 源码安装不再需要 Rust 工具链；Rust 源码归档 `archive/native_rust_202607/`
 
 ### Changed
+- **安装口径全面 uv**：README 移除 pip 安装方法二，`requirements.txt` 降级为参考文件。
+- 子进程统一以 CREATE_NO_WINDOW 启动，GUI 场景不再闪控制台黑框。
 - **输出命名新规**：源语终稿恒为 `<base>.srt`（不再被翻译覆盖）；开翻译时另写 `<base>_<语言>.srt`（如 `_chs`），默认双语、`--no-bilingual` 切单语；中间/单步产物三段式 `<base>_<阶段>_<模型>.srt`。
 - **review 重构**：标注随字幕本体携带、流程末尾统一生成——修复重编号后标错行、对齐低置信标注静默丢失；review 文件现在在流程结束时产出（取消时不产出，与终稿一致）。
 - **separate 模式重叠双模式**：默认把跨说话人重叠压成一句（`- 甲` / `- 乙`），`--overlap-mode keep` 保留双条真实重叠（不再被压平截尾）；VAD 开关在 separate 模式下生效；该模式的词级 review 恢复可用。
