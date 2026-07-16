@@ -209,6 +209,9 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
     _setup_cancel_handler()
     ResourceRegistry.instance().reset_controls()
 
+    import shutil
+    import tempfile
+    spill_dir = tempfile.mkdtemp(prefix="writansub_spill_")  # T17: 谁入口谁建谁清
     try:
         total_phases = 2 if do_separate else 1
 
@@ -218,7 +221,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
             _progress_bar(pct / total_phases, f"[DnR] {msg}")
 
         tiger_results = run_dnr_batch(
-            args.files, device=args.device,
+            args.files, spill_dir, device=args.device,
             save_intermediate=True,
             mss_model=args.mss_model,
             log_callback=_log, progress_callback=_dnr_p,
@@ -231,7 +234,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
                 _progress_bar((1 + pct) / total_phases, f"[Speech] {msg}")
 
             run_speech_batch(
-                tiger_results, device=args.device,
+                tiger_results, spill_dir, device=args.device,
                 save_intermediate=True,
                 log_callback=_log, progress_callback=_spk_p,
             )
@@ -241,6 +244,8 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
     except CancelledError:
         _log("处理已取消")
         sys.exit(1)
+    finally:
+        shutil.rmtree(spill_dir, ignore_errors=True)
 
 
 def cmd_transcribe(args: argparse.Namespace) -> None:

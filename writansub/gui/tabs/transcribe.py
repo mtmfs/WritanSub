@@ -313,7 +313,8 @@ class WhisperTab(StateMixin, QWidget):
 
         wh = None
         try:
-            wh = reg.acquire_model(f"whisper:{model_size}", device, _w_factory)
+            # 键格式与 cli/runner 对齐 (whisper:{model}:{compute_type})，本页工厂硬编码 int8 故键固定
+            wh = reg.acquire_model(f"whisper:{model_size}:int8", device, _w_factory)
             whisper_model = reg.get_model(wh)
 
             subs, word_data = transcribe(

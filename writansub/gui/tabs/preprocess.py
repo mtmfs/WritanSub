@@ -265,6 +265,9 @@ class TigerTab(StateMixin, QWidget):
 
         progress = self._progress.update_progress
 
+        import shutil
+        import tempfile
+        spill_dir = tempfile.mkdtemp(prefix="writansub_spill_")  # T17: 谁入口谁建谁清
         try:
             total_phases = 2 if do_separate else 1
 
@@ -275,6 +278,7 @@ class TigerTab(StateMixin, QWidget):
 
             tiger_results = run_dnr_batch(
                 media_files,
+                spill_dir,
                 device=device,
                 save_intermediate=save_intermediate,
                 mss_model=mss_model,
@@ -290,6 +294,7 @@ class TigerTab(StateMixin, QWidget):
 
                 run_speech_batch(
                     tiger_results,
+                    spill_dir,
                     device=device,
                     save_intermediate=save_intermediate,
                     log_callback=log,
@@ -309,6 +314,7 @@ class TigerTab(StateMixin, QWidget):
             if path:
                 log(f"详细日志已写入: {path}")
         finally:
+            shutil.rmtree(spill_dir, ignore_errors=True)
             self._signals.finished.emit()
 
     def _on_finished(self):

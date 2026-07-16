@@ -1,3 +1,4 @@
+import hashlib
 import os
 import wave
 from dataclasses import dataclass
@@ -39,6 +40,18 @@ def load_wav(path: str) -> tuple[torch.Tensor, int]:
         raw = wf.readframes(wf.getnframes())
     data = torch.frombuffer(bytearray(raw), dtype=torch.int16).float() / 32767.0
     return data.view(-1, nch).T.contiguous(), sr
+
+
+def _media_key(media: str) -> str:
+    """媒体绝对路径短哈希：溢出文件名的稳定 key，同名不同目录不冲突。"""
+    return hashlib.sha1(os.path.abspath(media).encode("utf-8")).hexdigest()[:12]
+
+
+def spill_wav(waveform: torch.Tensor, sr: int, spill_dir: str, media: str, kind: str) -> str:
+    """波形落盘到溢出目录并返回路径（T17 唯一写入点；T41 换成持久缓存目录即成缓存）。"""
+    path = os.path.join(spill_dir, f"{_media_key(media)}_{kind}.wav")
+    save_wav(waveform, path, sr)
+    return path
 
 
 def _hf_model_cached(cache_dir: str, repo_id: str) -> bool:
@@ -350,6 +363,7 @@ def _make_file_progress(idx: int, total: int, cb: Callable[[float, str], None] |
 
 def run_dnr_batch(
     media_files: list[str],
+    spill_dir: str,
     device: str = "cpu",
     cache_dir: str = "",
     save_intermediate: bool = False,
@@ -391,13 +405,19 @@ def run_dnr_batch(
             for name, track in [("dialog", dialog), ("effects", effects), ("music", music)]:
                 save_wav(track, os.path.join(out_dir, f"{bname}_{name}.wav"), 44100)
 
-        results[media] = {"dialog_wav": dialog, "dialog_sr": 44100}
+        # T17: 波形即分即落盘，results 只存路径——批处理 N 个文件不再全量驻留内存
+        results[media] = {
+            "dialog_path": spill_wav(dialog, 44100, spill_dir, media, "dialog"),
+            "dialog_sr": 44100,
+        }
+        del dialog, effects, music  # 防上一文件的波形活到下一文件分离完成
 
     return results
 
 
 def run_speech_batch(
     dnr_results: dict,
+    spill_dir: str,
     device: str = "cpu",
     cache_dir: str = "",
     save_intermediate: bool = False,
@@ -416,9 +436,11 @@ def run_speech_batch(
         _file_progress = _make_file_progress(idx, total, progress_callback)
 
         _file_progress(0.0, "正在分离说话人...")
+        dialog, dialog_sr = load_wav(data["dialog_path"])
         spk1, spk2 = separate_speakers(
-            data["dialog_wav"], 44100, device=device, cache_dir=cache_dir, log_callback=_log,
+            dialog, dialog_sr, device=device, cache_dir=cache_dir, log_callback=_log,
         )
+        del dialog
 
         if save_intermediate:
             out_dir = os.path.dirname(media)
@@ -430,10 +452,11 @@ def run_speech_batch(
         overlaps, overlap_ratio = detect_overlaps(spk1, spk2, sr=16000, log_callback=_log)
 
         data.update({
-            "spk1_wav": spk1,
-            "spk2_wav": spk2,
+            "spk1_path": spill_wav(spk1, 16000, spill_dir, media, "spk1"),
+            "spk2_path": spill_wav(spk2, 16000, spill_dir, media, "spk2"),
             "spk_sr": 16000,
             "overlap_regions": overlaps,
             "overlap_ratio": overlap_ratio,
         })
+        del spk1, spk2
         _file_progress(1.0, "完成")

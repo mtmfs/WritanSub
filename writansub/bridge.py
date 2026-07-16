@@ -39,6 +39,26 @@ def _gpu_mem_hint(device: str) -> str:
         return ""
 
 
+def _resolve_torch_module(obj: Any) -> Any:
+    """解析可挂取消钩子的 torch 根模块，无则返回 None。
+
+    候选顺序：对象本体(TIGER/demucs 等 nn.Module)、元组首元素(mms_fa 三元组)、
+    .model 属性(qwen3 包装器)。ScriptModule(silero 类)钩子不生效、
+    非 torch 对象(faster-whisper=CTranslate2)无钩子接口，均返回 None 跳过。
+    """
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return None
+    candidates = [obj]
+    if isinstance(obj, tuple) and obj:
+        candidates.append(obj[0])
+    candidates.append(getattr(obj, "model", None))
+    for c in candidates:
+        if isinstance(c, torch.nn.Module) and not isinstance(c, torch.jit.ScriptModule):
+            return c
+    return None
+
+
 def resolve_device(requested: str, log_callback=None) -> str:
     """请求 cuda 但 CUDA 不可用时回退 cpu 并知会调用方；其余原样返回。
 
@@ -193,7 +213,32 @@ class ResourceRegistry:
             raise
         elapsed = time.monotonic() - t0
         log_line(f"[model] loaded name={name!r} device={device!r} in {elapsed:.2f}s{_gpu_mem_hint(device)}")
+        try:
+            self._install_cancel_hooks(obj)
+        except Exception as e:
+            log_line(f"[model] cancel hooks skipped: {e!r}")
         return self.register_model(name, obj, device)
+
+    def _install_cancel_hooks(self, obj: Any) -> None:
+        """T42: 逐层 forward-pre-hook 查取消标志，取消从窗口级(数秒~数十秒)压到毫秒级。
+
+        只查 cancelled 不查 pause——前向中途挂起会占住显存，暂停维持窗口粒度。
+        钩子随模型对象生灭，无需清理。
+        """
+        from writansub.logger import log_line
+        root = _resolve_torch_module(obj)
+        if root is None:
+            return
+
+        def _hook(module, args):
+            if self._cancelled:
+                raise CancelledError("任务已取消")
+
+        count = 0
+        for _name, mod in root.named_modules():
+            mod.register_forward_pre_hook(_hook)
+            count += 1
+        log_line(f"[model] cancel hooks installed on {count} modules")
 
     def get_model(self, handle: int) -> Any:
         with self._lock:

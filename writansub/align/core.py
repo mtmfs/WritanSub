@@ -191,8 +191,11 @@ def _align_one_qwen3(
             else:
                 score = 0.0
             return (segments[0].start_time, segments[-1].end_time, score)
-    except Exception:
-        pass
+    except Exception as e:
+        # T42: 取消钩子在前向中抛 CancelledError，必须放行；其余异常维持按整句失败吞掉
+        from writansub.bridge import CancelledError
+        if isinstance(e, CancelledError):
+            raise
     return None
 
 

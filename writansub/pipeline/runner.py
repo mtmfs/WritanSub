@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
@@ -57,6 +58,21 @@ def run_pipeline(
     progress: Callable[[float, str], None],
 ) -> None:
     """TIGER → Whisper → 对齐 → 翻译。"""
+    # T17: 溢出目录随任务生灭，取消/异常同走 finally 清除
+    spill_dir = tempfile.mkdtemp(prefix="writansub_spill_") if cfg.tiger_mode else None
+    try:
+        _run_pipeline_impl(cfg, log, progress, spill_dir)
+    finally:
+        if spill_dir:
+            shutil.rmtree(spill_dir, ignore_errors=True)
+
+
+def _run_pipeline_impl(
+    cfg: PipelineConfig,
+    log: Callable[[str], None],
+    progress: Callable[[float, str], None],
+    spill_dir: str | None,
+) -> None:
     reg = ResourceRegistry.instance()
 
     def _cancelled() -> bool:
@@ -85,7 +101,7 @@ def run_pipeline(
     # Phase: TIGER 增强
     if cfg.tiger_mode and not _cancelled():
         tiger_results = _run_tiger_phase(
-            cfg, num_phases, log, progress, _cancelled,
+            cfg, num_phases, log, progress, _cancelled, spill_dir,
         )
 
     # Phase: Whisper 转录
@@ -173,6 +189,7 @@ def run_pipeline(
         log(f">>> Phase {a_phase}/{num_phases}: {label}")
 
         import torchaudio.transforms as T
+        from writansub.preprocess.core import load_wav
 
         if use_qwen3:
             from writansub.align.core import init_qwen3_model, run_qwen3_alignment
@@ -197,10 +214,10 @@ def run_pipeline(
                     )
 
                 tiger_data = tiger_results.get(media)
-                if tiger_data and "dialog_wav" in tiger_data:
+                if tiger_data and "dialog_path" in tiger_data:
+                    # T17: 按需从溢出 wav 读回，逐文件重绑定自然释放上一文件的波形
                     target_sr = 16000 if use_qwen3 else _mms_bundle.sample_rate
-                    src_sr = tiger_data["dialog_sr"]
-                    waveform = tiger_data["dialog_wav"]
+                    waveform, src_sr = load_wav(tiger_data["dialog_path"])
                     if src_sr != target_sr:
                         waveform = T.Resample(src_sr, target_sr)(waveform)
                 else:
@@ -308,6 +325,7 @@ def _run_tiger_phase(
     log: Callable[[str], None],
     progress: Callable[[float, str], None],
     cancelled: Callable[[], bool],
+    spill_dir: str,
 ) -> dict:
     log(f">>> Phase 1/{num_phases}: TIGER 增强")
     from writansub.preprocess.core import run_dnr_batch, run_speech_batch
@@ -319,7 +337,7 @@ def _run_tiger_phase(
         progress(pct * dnr_weight / num_phases, f"[TIGER] {msg}")
 
     tiger_results = run_dnr_batch(
-        cfg.media_files, device=cfg.device, save_intermediate=cfg.save_intermediate,
+        cfg.media_files, spill_dir, device=cfg.device, save_intermediate=cfg.save_intermediate,
         mss_model=cfg.mss_model,
         log_callback=log, progress_callback=_dnr_p,
     )
@@ -329,7 +347,7 @@ def _run_tiger_phase(
             progress((0.5 + pct * 0.5) / num_phases, f"[TIGER] {msg}")
 
         run_speech_batch(
-            tiger_results, device=cfg.device, save_intermediate=cfg.save_intermediate,
+            tiger_results, spill_dir, device=cfg.device, save_intermediate=cfg.save_intermediate,
             log_callback=log, progress_callback=_spk_p,
         )
 
@@ -344,46 +362,35 @@ def _transcribe_single(
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
 ) -> tuple[list, list]:
-    from writansub.preprocess.core import save_wav
-
+    # T17: 溢出 wav 已在盘上，直接喂 whisper，免二次落盘
     whisper_input = media
-    tmp_dialog = None
+    if tiger_data and "dialog_path" in tiger_data:
+        whisper_input = tiger_data["dialog_path"]
 
-    if tiger_data and "dialog_wav" in tiger_data:
-        tmp_dialog = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        tmp_dialog.close()
-        save_wav(tiger_data["dialog_wav"], tmp_dialog.name, tiger_data["dialog_sr"])
-        whisper_input = tmp_dialog.name
+    overlap_r = tiger_data.get("overlap_regions") if tiger_data else None
+    separated = None
+    if overlap_r and tiger_data and "spk1_path" in tiger_data:
+        # spk 张量只在本文件转录期间存活，函数返回即释放
+        from writansub.preprocess.core import load_wav
+        separated = (load_wav(tiger_data["spk1_path"])[0], load_wav(tiger_data["spk2_path"])[0])
 
-    try:
-        overlap_r = tiger_data.get("overlap_regions") if tiger_data else None
-        separated = None
-        if tiger_data and "spk1_wav" in tiger_data:
-            separated = (tiger_data["spk1_wav"], tiger_data["spk2_wav"])
-
-        if overlap_r and separated:
-            return _whisper_with_overlap(
-                whisper_input, overlap_r, separated,
-                tiger_data.get("spk_sr", 16000),
-                cfg, whisper_model, progress_callback, log,
-            )
-
-        return transcribe(
-            whisper_input, lang=cfg.lang, device=cfg.device,
-            log_callback=log,
-            progress_callback=progress_callback,
-            condition_on_previous_text=cfg.condition_on_prev,
-            model=whisper_model,
-            cancelled=lambda: ResourceRegistry.instance().cancelled,
-            vad_filter=cfg.vad_filter,
-            initial_prompt=cfg.initial_prompt,
+    if overlap_r and separated:
+        return _whisper_with_overlap(
+            whisper_input, overlap_r, separated,
+            tiger_data.get("spk_sr", 16000),
+            cfg, whisper_model, progress_callback, log,
         )
-    finally:
-        if tmp_dialog:
-            try:
-                os.unlink(tmp_dialog.name)
-            except OSError:
-                pass
+
+    return transcribe(
+        whisper_input, lang=cfg.lang, device=cfg.device,
+        log_callback=log,
+        progress_callback=progress_callback,
+        condition_on_previous_text=cfg.condition_on_prev,
+        model=whisper_model,
+        cancelled=lambda: ResourceRegistry.instance().cancelled,
+        vad_filter=cfg.vad_filter,
+        initial_prompt=cfg.initial_prompt,
+    )
 
 
 def _whisper_with_overlap(

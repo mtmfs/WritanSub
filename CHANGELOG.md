@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
-## [0.1.9] - 2026-07-12 批次 5
+## [0.1.10] - 2026-07-16 批次 8（内存批）
+
+### Changed
+- **TIGER 波形即分即落盘**：批处理时分离出的人声/说话人轨写入临时溢出目录、用到时按需读回，内存峰值从"全部文件波形常驻"（约 600MB/小时音频 × 文件数）降为单文件量级；溢出目录随任务结束/取消自动清除。产物与行为不变。
+- **取消响应压到毫秒级**：torch 模型（TIGER/MMS/Qwen3/demucs）统一挂逐层取消钩子，降噪/对齐推理中途取消不再等完当前前向窗口（CPU 模式原需数秒~数十秒）。暂停仍为窗口粒度。
+
+### Fixed
+- GUI 转录页 whisper 缓存键与 CLI/流水线格式不一致，同一模型在一个会话里会加载两份（各占 ~1.5GB）。
+
+
 
 ### Changed
 - **镜像探测改经系统代理的 HTTPS 实测**（Clash 场景不再误判不可达，SNI 被重置不再误判可达）；探测超时 2s→5s，仅影响断网时的启动等待。

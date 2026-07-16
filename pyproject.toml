@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "writansub"
-version = "0.1.9"
+version = "0.1.10"
 description = "AI字幕处理流水线：音频预处理 → 语音识别 → 强制打轴 → AI 翻译"
 readme = "README.md"
 license = {text = "GPL-3.0"}
