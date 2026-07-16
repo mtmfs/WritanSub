@@ -50,5 +50,10 @@ Audit_Report_*.txt
 Compact_GUI_Layout_Proposal.html
 方案*.txt
 
+# 内部工作文档（审计/批次/复盘报告、缺陷清单、AI 工作计划）
+*_Report_*.md
+BUG_TRACKER.md
+docs/superpowers/
+
 # 敏感文件 & 个人笔记
 开发者文件/
