@@ -375,11 +375,10 @@ def post_process(
     # 显式拷贝 low_words：replace 浅拷贝共享列表引用，原地 += 会污染调用方数据
     out = [replace(s, low_words=list(s.low_words)) for s in subs]
 
-    # separate 模式先按时间稳定排序（对齐可能轻微乱序）；无 speaker 时不排，遗留行为零变化
-    if any(s.speaker for s in out):
-        out.sort(key=lambda s: s.start)
-        if overlap_mode == "merge":
-            out = _merge_speaker_overlaps(out)
+    # 每句独立对齐可能改变先后顺序；所有字幕都必须先排序，再处理相邻时间轴。
+    out.sort(key=lambda s: s.start)
+    if overlap_mode == "merge" and any(s.speaker for s in out):
+        out = _merge_speaker_overlaps(out)
 
     # 快照必须在重叠合并之后，否则 pairwise 循环索引错位
     raw_starts = [s.start for s in out]
@@ -392,6 +391,10 @@ def post_process(
     for i in range(len(out) - 1):
         curr = out[i]
         nxt = out[i + 1]
+
+        # 同起点没有可贴合的正时长区间，保留原有重叠而不是压成零时长。
+        if nxt.start == curr.start:
+            continue
 
         # keep 模式：异说话人的真实重叠不做贴合/压平
         # （同说话人 <= extend_end 的轻微重叠接受，不值得引入分轨钳制的复杂度）
@@ -408,7 +411,7 @@ def post_process(
         else:
             curr.end = nxt.start
 
-        if curr.end < curr.start:
+        if curr.end <= curr.start:
             curr.end = curr.start + 0.01
 
     if min_duration > 0:
@@ -427,13 +430,14 @@ def post_process(
                 prev = merged[-1]
                 prev.text = prev.text + sub.text
                 prev.low_words = prev.low_words + sub.low_words  # 重绑，勿用 +=
+                prev.score = min(prev.score, sub.score)
                 prev.end = max(prev.end, sub.end)
                 last_raw_end = max(last_raw_end, raw_ends[i])
             else:
                 merged.append(sub)
                 last_raw_end = raw_ends[i]
-        for i, s in enumerate(merged, 1):
-            s.index = i
         out = merged
 
+    for i, s in enumerate(out, 1):
+        s.index = i
     return out

@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import tempfile
@@ -82,8 +83,8 @@ def _run_pipeline_impl(
     pp = {k: getattr(cfg, k) for k in pp_keys}
 
     has_ref = bool(cfg.ref_srt) or cfg.use_ref_sub
-    skip_align = cfg.ref_direct and has_ref
-    num_phases = (1 if skip_align else 2) + (1 if cfg.translate else 0) + (1 if cfg.tiger_mode else 0)
+    # 参考映射和强制对齐共享时间轴阶段，回退时无需改变进度分母。
+    num_phases = 2 + (1 if cfg.translate else 0) + (1 if cfg.tiger_mode else 0)
     phase_offset = 1 if cfg.tiger_mode else 0
     total = len(cfg.media_files)
 
@@ -92,7 +93,7 @@ def _run_pipeline_impl(
 
     cfg.device = resolve_device(cfg.device, log)
     log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} "
-        f"align_model={cfg.align_model} has_ref={has_ref} skip_align={skip_align} "
+        f"align_model={cfg.align_model} has_ref={has_ref} ref_direct={cfg.ref_direct} "
         f"translate={cfg.translate} device={cfg.device}")
     log(f"[决策] whisper={cfg.whisper_model} lang={cfg.lang} "
         f"condition_on_prev={cfg.condition_on_prev} vad_filter={cfg.vad_filter}")
@@ -146,72 +147,102 @@ def _run_pipeline_impl(
         reg.release_model(wh)
 
     # Phase: 参考字幕映射（可选）
+    direct_ref_media: set[str] = set()
     if sub_results and not _cancelled() and has_ref:
-        from writansub.subtitle.ref_align import map_whisper_to_ref
+        from writansub.subtitle.ref_align import _map_whisper_to_ref
         from writansub.subtitle.extract import probe_subtitle_tracks, select_track, extract_subtitle
 
         external_ref: list | None = None
+        external_ref_error: str | None = None
         if cfg.ref_srt:
-            external_ref = parse_srt(cfg.ref_srt)
-            log(f"使用外部参考字幕: {cfg.ref_srt} ({len(external_ref)} 条)")
+            try:
+                external_ref = parse_srt(cfg.ref_srt)
+                log(f"使用外部参考字幕: {cfg.ref_srt} ({len(external_ref)} 条)")
+            except CancelledError:
+                raise
+            except Exception as e:
+                external_ref_error = f"无法读取外部参考字幕: {e}"
 
         for media in cfg.media_files:
             if media not in sub_results:
                 continue
+            reg.checkpoint()
             try:
-                if external_ref is not None:
+                if external_ref_error:
+                    raise ValueError(external_ref_error)
+                if cfg.ref_srt:
                     ref_subs = external_ref
                 else:
                     tracks = probe_subtitle_tracks(media)
                     if not tracks:
-                        log(f"未找到内嵌字幕轨: {os.path.basename(media)}")
-                        continue
+                        raise ValueError("未找到内嵌字幕轨")
                     track_idx = cfg.ref_sub_track if cfg.ref_sub_track is not None else select_track(tracks, cfg.lang)
                     if track_idx is None:
-                        log(f"未匹配到字幕轨: {os.path.basename(media)}")
-                        continue
+                        raise ValueError("未匹配到字幕轨")
                     ref_subs = extract_subtitle(media, track_idx)
                     log(f"提取内嵌字幕轨 #{track_idx}: {len(ref_subs)} 条")
 
-                mapped = map_whisper_to_ref(sub_results[media], ref_subs)
-                log(f"参考字幕映射完成: {len(mapped)} 条 (原 Whisper {len(sub_results[media])} 条)")
+                if not ref_subs:
+                    raise ValueError("参考字幕为空")
+                original = sub_results[media]
+                mapped, matched = _map_whisper_to_ref(original, ref_subs)
+                if cfg.ref_direct and matched < len(original):
+                    raise ValueError(f"参考轴仅匹配 {matched}/{len(original)} 条识别字幕")
+                log(f"参考字幕映射完成: {len(mapped)} 条，匹配 {matched}/{len(original)} 条识别字幕")
                 sub_results[media] = mapped
+                if cfg.ref_direct and original:
+                    direct_ref_media.add(media)
             except CancelledError:
                 raise
             except Exception as e:
-                log(f"参考字幕处理失败，跳过: {e}")
+                log(f"[参考] {os.path.basename(media)}: {e}；保留识别结果，回退强制对齐")
 
     a_phase = 2 + phase_offset
     aligned_results: dict[str, Any] = {}
-    if sub_results and not _cancelled() and not skip_align:
+    if sub_results and not _cancelled():
         use_qwen3 = (cfg.align_model == "qwen3-fa-0.6b")
         label = "Qwen3 对齐" if use_qwen3 else "MMS 对齐"
-        log(f">>> Phase {a_phase}/{num_phases}: {label}")
+        log(f">>> Phase {a_phase}/{num_phases}: 时间轴处理（参考轴 / {label}）")
 
         import torchaudio.transforms as T
         from writansub.preprocess.core import load_wav
 
-        if use_qwen3:
-            from writansub.align.core import init_qwen3_model, run_qwen3_alignment
-            mh = reg.acquire_model("qwen3_fa", cfg.device, lambda: init_qwen3_model(cfg.device))
-            qwen3_model = reg.get_model(mh)
-            mms_bundle = None
-        else:
-            from torchaudio.pipelines import MMS_FA as _mms_bundle
-            mh = reg.acquire_model("mms_fa", cfg.device, lambda: init_model(cfg.device))
-            mms_bundle = reg.get_model(mh)
-            qwen3_model = None
+        mh = None
+        qwen3_model = mms_bundle = None
 
         try:
             for idx, media in enumerate(cfg.media_files, 1):
                 if _cancelled() or media not in sub_results:
                     continue
+                reg.checkpoint()
 
                 def _a_p(pct, msg, _idx=idx):
                     progress(
                         ((1 + phase_offset) * total + (_idx - 1) + pct) / (total * num_phases),
-                        f"[对齐 {_idx}/{total}] {msg}",
+                        f"[时间轴 {_idx}/{total}] {msg}",
                     )
+
+                if media in direct_ref_media:
+                    aligned_results[media] = post_process(
+                        sub_results[media], overlap_mode=cfg.overlap_mode, **pp)
+                    log(f"[参考] {os.path.basename(media)}: 完整使用参考轴，跳过强制对齐")
+                    _a_p(1.0, "参考轴处理完成")
+                    continue
+                if not sub_results[media]:
+                    aligned_results[media] = []
+                    _a_p(1.0, "无识别字幕，跳过对齐")
+                    continue
+
+                # 只有实际需要对齐的文件才加载模型，批次内仍只加载一次。
+                if mh is None:
+                    if use_qwen3:
+                        from writansub.align.core import init_qwen3_model, run_qwen3_alignment
+                        mh = reg.acquire_model("qwen3_fa", cfg.device, lambda: init_qwen3_model(cfg.device))
+                        qwen3_model = reg.get_model(mh)
+                    else:
+                        from torchaudio.pipelines import MMS_FA as _mms_bundle
+                        mh = reg.acquire_model("mms_fa", cfg.device, lambda: init_model(cfg.device))
+                        mms_bundle = reg.get_model(mh)
 
                 tiger_data = tiger_results.get(media)
                 if tiger_data and "dialog_path" in tiger_data:
@@ -252,14 +283,10 @@ def _run_pipeline_impl(
                 base = os.path.splitext(media)[0]
                 if cfg.keep_aligned_srt:
                     write_srt(final, stage_path(base, "aligned", cfg.align_model))
+                _a_p(1.0, "强制对齐后处理完成")
         finally:
-            reg.release_model(mh)
-
-    # ref_direct: 跳过对齐，直接后处理
-    if skip_align and sub_results and not _cancelled():
-        log("参考字幕直接模式: 跳过强制对齐")
-        for media, subs in sub_results.items():
-            aligned_results[media] = post_process(subs, overlap_mode=cfg.overlap_mode, **pp)
+            if mh is not None:
+                reg.release_model(mh)
 
     # 源语终稿恒写 <base>.srt（先于翻译阶段落盘，翻译中途取消也不丢日文轴）
     # review 同点生成：此时索引已全程稳定，词级+行级标注一次写盘（T06）
@@ -268,7 +295,7 @@ def _run_pipeline_impl(
             base = os.path.splitext(media)[0]
             write_srt(subs, base + ".srt")
             if cfg.generate_review:
-                thr = cfg.align_conf_threshold if not skip_align else 0.0
+                thr = 0.0 if media in direct_ref_media else cfg.align_conf_threshold
                 srt_c, ass_c, n_words, n_lines = generate_review_final(subs, thr)
                 if n_words or n_lines:
                     write_review_files(base, srt_c, ass_c)
@@ -393,6 +420,34 @@ def _transcribe_single(
     )
 
 
+def _overlap_windows(full_subs: list, regions: list) -> list[tuple[float, float, set[int]]]:
+    """将相交的字幕和重叠区间连成完整窗口，只保留包含重叠区间的组。
+
+    原字幕索引随组携带，避免扩展后重复识别/替换同一句；仅端点相接不算重叠。
+    """
+    spans = [(s.start, s.end, i) for i, s in enumerate(full_subs)]
+    spans += [(r.start, r.end, None) for r in regions]
+    spans = sorted((s for s in spans if s[1] > s[0]), key=lambda s: s[0])
+    windows = []
+    start, end = 0.0, -math.inf
+    indices: set[int] = set()
+    has_region = False
+    for span_start, span_end, index in spans:
+        if span_start >= end:
+            if has_region:
+                windows.append((start, end, indices))
+            start, end, indices, has_region = span_start, span_end, set(), False
+        else:
+            end = max(end, span_end)
+        if index is None:
+            has_region = True
+        else:
+            indices.add(index)
+    if has_region:
+        windows.append((start, end, indices))
+    return windows
+
+
 def _whisper_with_overlap(
     media: str,
     overlap_regions: list,
@@ -425,18 +480,25 @@ def _whisper_with_overlap(
 
     # (Sub, word_data) 成对携带过丢弃/排序/重编号——separate 模式的词级 review 由此存活
     overlap_pairs: list[tuple] = []
-    spk1_wav, spk2_wav = separated_tracks
+    replaced: set[int] = set()
 
-    for region in overlap_regions:
-        if _cancelled():
-            break
-        start = int(region.start * spk_sr)
-        end = int(region.end * spk_sr)
+    for win_start, win_end, indices in _overlap_windows(full_subs, overlap_regions):
+        reg.checkpoint()
+        start = math.floor(win_start * spk_sr)
+        end = math.ceil(win_end * spk_sr)
+        info = f"[重叠 {win_start:.3f}-{win_end:.3f}s]"
+        if start < 0 or any(end > wav.shape[-1] for wav in separated_tracks):
+            log(f"{info} 分离音轨不足以覆盖整句，保留原字幕")
+            continue
+        if end - start < math.ceil(0.1 * spk_sr):
+            log(f"{info} 区间过短，保留原字幕")
+            continue
+        window_pairs: list[tuple] = []
+        offset = start / spk_sr
 
-        for spk_no, spk_wav in enumerate((spk1_wav, spk2_wav), 1):
+        for spk_no, spk_wav in enumerate(separated_tracks, 1):
+            reg.checkpoint()
             chunk = spk_wav[:, start:end]
-            if chunk.shape[1] < 1600:
-                continue
 
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 tmp_path = f.name
@@ -448,29 +510,32 @@ def _whisper_with_overlap(
                     condition_on_previous_text=False, model=whisper_model,
                     initial_prompt=cfg.initial_prompt,
                 )
-                for s in local_subs:
-                    s.start += region.start
-                    s.end += region.start
-                    s.speaker = spk_no
-                overlap_pairs.extend(zip(local_subs, local_words))
+                reg.checkpoint()
+                for s, words in zip(local_subs, local_words):
+                    if s.text.strip() and s.end > s.start:
+                        window_pairs.append((replace(
+                            s, start=s.start + offset, end=s.end + offset, speaker=spk_no,
+                        ), words))
             finally:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
 
-    commented = set()
-    for i, sub in enumerate(full_subs):
-        if any(max(r.start, sub.start) < min(r.end, sub.end) for r in overlap_regions):
-            commented.add(i)
+        # 两轨都完成后提交替换；空识别不能删掉原句。
+        if window_pairs:
+            replaced.update(indices)
+            overlap_pairs.extend(window_pairs)
+        else:
+            log(f"{info} 两条分轨均无有效识别结果，保留原字幕")
 
+    reg.checkpoint()
     pairs = [(s, w) for i, (s, w) in enumerate(zip(full_subs, full_word_data))
-             if i not in commented]
+             if i not in replaced]
     pairs += overlap_pairs
     pairs.sort(key=lambda p: p[0].start)
-    subs = [p[0] for p in pairs]
+    subs = [replace(s, index=i, low_words=list(s.low_words))
+            for i, (s, _) in enumerate(pairs, 1)]
     word_data = [p[1] for p in pairs]
-    for i, s in enumerate(subs, 1):
-        s.index = i
 
     return subs, word_data

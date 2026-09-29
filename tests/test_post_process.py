@@ -130,3 +130,41 @@ def test_keep_min_merge_never_crosses_speakers():
     out = post_process(subs, **{**ZERO, "min_duration": 0.3, "gap_threshold": 0.5},
                        overlap_mode="keep")
     assert [s.text for s in out] == ["A", "B短"]
+
+
+def test_unsorted_plain_cues_sorted_before_gap_processing():
+    subs = [_sub(8, 11.8, 12.2, "后"), _sub(9, 11.6, 11.9, "前")]
+    out = post_process(subs, min_duration=0)
+    assert [(s.index, s.text) for s in out] == [(1, "前"), (2, "后")]
+    assert out[0].end == pytest.approx(11.8)
+    assert out[1].end == pytest.approx(12.5)
+    assert [s.index for s in subs] == [8, 9]
+    assert [s.end for s in subs] == [12.2, 11.9]
+
+
+@pytest.mark.parametrize("mode", ["merge", "keep"])
+def test_equal_starts_keep_positive_durations_and_stable_order(mode):
+    subs = [_sub(5, 1, 3, "甲"), _sub(8, 1, 2, "乙")]
+    out = post_process(subs, **ZERO, overlap_mode=mode)
+    assert [(s.index, s.text, s.start, s.end) for s in out] == [
+        (1, "甲", 1, 3), (2, "乙", 1, 2)]
+
+
+def test_merge_renumbers_even_without_short_cue_merging():
+    subs = [_sub(8, 1, 3, "甲", speaker=1), _sub(9, 2, 4, "乙", speaker=2),
+            _sub(10, 6, 7, "后")]
+    out = post_process(subs, **ZERO)
+    assert [(s.index, s.text) for s in out] == [(1, "- 甲\n- 乙"), (2, "后")]
+
+
+def test_short_merge_retains_failed_score_and_review_marker():
+    from writansub.subtitle.review import generate_review_final
+    subs = [_sub(1, 0, 1, "前", score=.9, low_words=["前"]),
+            _sub(2, 1.01, 1.1, "失败", score=0, low_words=["失败"]),
+            _sub(3, 1.2, 2, "后", score=.9)]
+    out = post_process(subs)
+    assert out[0].text == "前失败"
+    assert out[0].score == 0
+    assert out[0].low_words == ["前", "失败"]
+    assert generate_review_final(out, .5)[3] == 1
+    assert subs[0].score == .9 and subs[0].low_words == ["前"]
