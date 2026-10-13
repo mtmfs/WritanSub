@@ -2,86 +2,48 @@
 
 AI 字幕处理流水线：音频预处理 → 语音识别 → 强制打轴 → AI 翻译
 
-本项目面向**完全零基础**的用户。如果你只会用电脑看视频、下载软件，按照本说明一步一步操作，也可以独立完成字幕制作。
+本项目是一个**本地命令行工具**，只服务作者本人与 Agent（Claude Code 的 `ws` 技能据本文档构建 `writansub-cli` 命令）。图形界面已于 2026-10 整体删除，代码归档在 `archive/gui_pyside6_202610/`；安装器与启动器停止维护，归档在 `archive/build_chain_202610/`。
 
 ---
 
 ## 目录
 
-1. [我能用 WritanSub 做什么？](#我能用-writansub-做什么)
-2. [快速开始（第一次使用）](#快速开始第一次使用)
-3. [环境要求](#环境要求)
-4. [安装](#安装)
-5. [使用指南（GUI）](#使用指南gui)
+1. [功能概览](#功能概览)
+2. [环境要求](#环境要求)
+3. [安装](#安装)
+4. [快速开始](#快速开始)
+5. [CLI 命令行参考](#cli-命令行参考)
 6. [输出文件说明](#输出文件说明)
 7. [模型下载](#模型下载)
-8. [CLI 命令行参考](#cli-命令行参考)
-9. [常见问题与排错](#常见问题与排错)
-10. [开发](#开发)
-11. [项目结构](#项目结构)
-12. [许可证](#许可证)
+8. [常见问题与排错](#常见问题与排错)
+9. [开发](#开发)
+10. [项目结构](#项目结构)
+11. [许可证](#许可证)
 
 ---
 
-## 我能用 WritanSub 做什么？
+## 功能概览
 
-WritanSub 把「做字幕」这件事拆成了几个自动化的步骤。你只需要准备好视频或音频文件，软件会帮你：
+WritanSub 把「做字幕」拆成四个阶段，每个阶段是一个子命令，也可以用 `pipeline` 一条命令串起来：
 
-1. **预处理** — 如果视频里有背景音乐、音效、多人同时说话，可以先分离出干净的人声
-2. **语音识别** — 把说话内容转换成文字（支持日语、中文、英语、韩语等）
-3. **强制打轴** — 把文字和画面里的说话时间精确对齐，生成带时间轴的字幕
-4. **AI 翻译** — 把日语字幕自动翻译成中文（或其他语言）
+1. **预处理（preprocess）** — 视频里有背景音乐、音效、多人同时说话时，先用 TIGER 分离出干净人声；可选说话人分轨
+2. **语音识别（transcribe）** — faster-whisper 把说话内容转成文字（支持日语、中文、英语、韩语等）
+3. **强制打轴（align）** — MMS_FA / Qwen3 把文字与音频精确对齐，生成带时间轴的字幕，再做间距、时长等后处理
+4. **AI 翻译（translate）** — 经 OpenAI 兼容接口把字幕翻译成目标语言（默认简体中文）
 
-**典型工作流程：**
+**典型工作流：**
 
-- **最简单**：把视频拖到「一键流水线」，等待处理，最后拿到中文字幕
-- **更精细**：先用「预处理」去噪 → 「语音识别」出日文 → 人工校对日文 → 「AI 翻译」出中文
-- **已有字幕只想对齐**：用「强制打轴」把现成的 SRT 字幕和音频精确对齐
+```bash
+# 一条命令跑完：降噪 → 识别 → 打轴 → 翻译 → 生成校对文件
+writansub-cli pipeline video.mp4 --lang ja --denoise --translate --review --api-key sk-xxx
 
----
+# 分步：先出日文字幕，人工校对后再翻译
+writansub-cli pipeline video.mp4 --lang ja --denoise
+writansub-cli translate video.srt --api-key sk-xxx
 
-## 快速开始（第一次使用）
-
-> 目标：用最快的速度，从一个视频文件拿到对齐好的字幕。
-
-### 第一步：检查电脑能不能跑
-
-- 操作系统：Windows 10/11（64 位）
-- 显卡：NVIDIA 独立显卡，显存 ≥6 GB 最佳（4 GB 可跑小模型）
-- 硬盘：至少预留 20 GB 空间（用于安装和下载模型）
-- 驱动：NVIDIA 显卡驱动建议 ≥570（不清楚就先去 [NVIDIA 官网](https://www.nvidia.cn/drivers/lookup/) 更新驱动）
-
-### 第二步：安装软件环境
-
-本项目使用 uv 管理环境（唯一官方安装方式）：
-
-1. 按 `Win + R`，输入 `cmd`，回车，打开黑框框（命令提示符）
-2. 输入下面命令安装 uv：
-   ```bash
-   pip install uv
-   ```
-3. 去 GitHub 下载本项目（或找人要压缩包），解压到某个文件夹，比如 `D:\WritanSub`
-4. 在 cmd 里进入这个文件夹：
-   ```bash
-   cd /d D:\WritanSub
-   ```
-5. 运行安装：
-   ```bash
-   uv sync
-   ```
-   这一步会自动下载 Python 依赖和模型库，可能要 10~30 分钟，取决于网速。
-
-### 第三步：启动 GUI 并跑第一个视频
-
-1. 双击文件夹里的 `WritanSub.bat`
-2. 等待窗口打开（首次启动会自动下载模型，请保持网络畅通）
-3. 点击顶部标签页「一键流水线」
-4. 点击「添加文件」，选择你的视频（如 `video.mp4`）
-5. 保持默认设置，直接点击右下角「开始处理」
-6. 等待进度条跑完
-7. 去视频所在的文件夹找输出文件（见下节「输出文件说明」）
-
-> **国内用户注意**：程序已内置 Hugging Face 镜像自动切换。如果网络不好，会自动使用 `hf-mirror.com` 下载模型，无需手动设置。
+# 已有字幕只想重新打轴
+writansub-cli align --audio video.mp4 --srt raw.srt -o aligned.srt
+```
 
 ---
 
@@ -107,7 +69,7 @@ WritanSub 把「做字幕」这件事拆成了几个自动化的步骤。你只�
 
 ## 安装
 
-### uv 安装（唯一官方方式）
+uv 是唯一官方安装方式：
 
 ```bash
 # 1. 安装 uv
@@ -121,252 +83,38 @@ cd WritanSub
 uv sync
 ```
 
-**安装后怎么启动？**
+**三种等价的启动方式：**
 
 ```bash
-# GUI 模式
-uv run python -m writansub
-
-# CLI 模式
-uv run writansub-cli --help
+uv run writansub-cli --help      # 推荐
+python -m writansub.cli --help   # 已激活 .venv 时
+WritanSubCLI.bat --help          # Windows 脚本调用；按 uv → .venv → 系统 Python 的顺序找运行环境
 ```
 
-### Windows 快捷启动
-
-项目根目录提供了两个批处理文件，双击即可启动：
-
-- `WritanSub.bat` — 启动 GUI（图形界面）
-- `WritanSubCLI.bat` — 启动 CLI（命令行）
-
-这两个脚本会自动检测你的环境：优先使用 `uv` → 其次用 `.venv` → 最后 fallback 到系统 Python。
+下文示例一律写 `writansub-cli ...`，按需替换成上面任一写法。
 
 ---
 
-## 使用指南（GUI）
+## 快速开始
 
-启动 GUI 后，顶部有 5 个标签页。下面按使用频率从高到低讲解。
+> 目标：从一个视频文件拿到对齐好的日文字幕。
 
-### 1. 一键流水线（最常用）
+1. 确认显卡驱动 ≥570（不清楚就先去 [NVIDIA 官网](https://www.nvidia.cn/drivers/lookup/) 更新）
+2. 按上节 `uv sync` 装好环境
+3. 跑第一条流水线：
 
-这是把「预处理 → 语音识别 → 强制打轴 → AI 翻译」串起来的全自动模式。
+   ```bash
+   uv run writansub-cli pipeline video.mp4 --lang ja --denoise --review
+   ```
 
-#### 界面分区说明
+   首次运行会自动下载模型（Whisper large-v3 约 1.5 GB、MMS_FA 约 1.2 GB、TIGER 约 1 GB），请保持网络畅通
+4. 处理完成后，到 `video.mp4` 所在文件夹找 `video.srt`（终稿）和 `video_review.ass`（低置信标记，拖进播放器核对）
 
-- **左上：媒体文件列表** — 点击「添加文件」选择视频/音频，可批量添加多个
-- **左中：模型配置**
-  - **识别语言**：默认 `ja`（日语），可选 `zh`（中文）、`en`（英语）、`ko`（韩语）等
-  - **听写模型**：默认 `large-v3`（最准，需约 10 GB 显存），显存不够可换 `medium` 或 `small`
-  - **推理设备**：默认 `cuda`（用显卡），没有 N 卡选 `cpu`（极慢）
-  - **对齐模型**：默认 `mms_fa`，轻量且效果稳定；可选 `qwen3-fa-0.6b`
-  - **启用前文调优**：勾选后，前一句识别结果会影响后一句，整体更连贯；如果前一句错了，可能把错误传下去
-  - **跳过静音 (VAD)**：勾选后自动跳过没有人声的片段，加快识别速度；如果已经做了 TIGER 预处理，建议关闭
-  - **初始提示**：输入人名、术语（如 `瀬尾拓也 伊地知琴子`），让 Whisper 统一写法
-- **右中：预处理增强**
-  - **人声去噪 (DnR)**：分离出人声，去掉背景音乐和音效
-  - **重叠分离 (Separate)**：分离多个说话人，并检测重叠片段；会自动先执行降噪
-  - **保存中间音轨**：勾选后保留 TIGER 处理后的临时 WAV 文件
-- **右上：输出保留**
-  - **保留 Whisper SRT**：保留原始识别结果（未经时间轴对齐）
-  - **保留对齐 SRT**：保留强制对齐后的中间结果
-  - **生成 Review 文件**：勾选后，如果存在低置信度的词/句，会生成 `_review.srt` 和 `_review.ass`
-- **右下：参考字幕**
-  - **参考内嵌字幕**：从视频里提取已有字幕的时间轴作为参考
-  - **外部 SRT**：手动指定一个参考字幕文件
-  - **直接使用参考轴**：跳过强制对齐，直接用参考字幕的时间轴
-- **底部：后处理参数**
-  - 一般用默认即可。常见调整：
-    - **识别置信阈值**（默认 0.5）：低于此值的词会在 review 文件里标红
-    - **对齐窗口余量**（默认 0.5）：对齐时给每句话两边留的余量，增大可提高成功率
-
-#### 操作步骤
-
-1. 点击「添加文件」，选择要处理的视频
-2. （可选）根据需要勾选「人声去噪」或「重叠分离」
-3. （可选）如果要做 AI 翻译，勾选左下角「AI 翻译」（翻译 API 设置见「AI 翻译」页）
-4. 点击「开始处理」
-5. 等待进度条完成。过程中可以点「暂停」临时停下，或点「取消任务」中断
-
-#### 什么时候用参考字幕？
-
-如果你手头有**时间轴准确但文字是错的语言**的字幕（比如原片有英文字幕，你想做中文字幕），可以勾选「参考内嵌字幕」或指定「外部 SRT」，这样 Whisper 的文本会自动映射到参考字幕的时间轴上，省去重新打轴的步骤。
-
----
-
-### 2. 预处理
-
-如果你只想做音频降噪/分轨，不跑后面的识别，用这个页面。
-
-#### 操作步骤
-
-1. 点击「添加」，选择媒体文件（可多个）
-2. 勾选「降噪」和/或「对话分轨」
-   - 勾「对话分轨」会自动勾「降噪」（因为分轨需要先降噪）
-3. 选择设备（`cuda` 或 `cpu`）
-4. 点击「开始处理」
-
-#### 输出说明
-
-处理后的音频会生成在原视频同目录下，文件名带 `_dnr`（降噪后）或 `_speech`（分轨后）。
-
----
-
-### 3. 语音识别
-
-单文件 Whisper 转录。适合只想把音频/视频转成文字 SRT，不做后续处理。
-
-#### 操作步骤
-
-1. 「媒体文件」选择你的视频/音频
-2. 「输出 SRT」会自动填为同目录下同名的 `.srt`，可手动改
-3. 选择语言、模型、设备
-4. （可选）调整「识别置信阈值」— 设为 0.5 表示概率低于 50% 的词会在 review 文件里标出来
-5. （可选）在「初始提示」里输入人名/术语，提高识别准确率
-6. 点击「开始识别」
-
-#### 小贴士
-
-- **上文关联**：默认开启。做动漫/电视剧时建议开启，角色名更稳定；做访谈/演讲时如果前几句容易错，可关闭
-- **跳过静音**：长视频（>30 分钟）建议开启，能省一半时间
-
----
-
-### 4. 强制打轴
-
-如果你已经有 SRT 字幕文件，但时间轴不准（或完全没有时间轴），用这个功能把字幕和音频精确对齐。
-
-#### 操作步骤
-
-1. 「音频文件」选择原视频/音频
-2. 「字幕文件」选择要对齐的 `.srt`
-3. 「输出路径」自动为 `xxx_aligned.srt`
-4. 选择语言和对齐模型（默认 `mms_fa`）
-5. 点击「开始对齐」
-
-#### 对齐模型怎么选？
-
-- **mms_fa**：Meta 开源模型，效果稳定，支持多种语言，推荐日常使用
-- **qwen3-fa-0.6b**：阿里 Qwen3 强制对齐模型，显存占用约 2 GB，在某些场景下精度更高
-
----
-
-### 5. AI 翻译
-
-把已有的 SRT 字幕文件翻译成其他语言。
-
-#### 操作步骤
-
-1. 「字幕文件」选择要翻译的 `.srt`
-2. 「输出路径」自动为 `xxx_translated.srt`
-3. 填写翻译设置：
-   - **目标语言**：默认「简体中文」
-   - **模型**：默认 `deepseek-chat`（DeepSeek V3）
-   - **API 地址**：默认 `https://api.deepseek.com/v1`
-   - **API Key**：你在 DeepSeek（或其他兼容 OpenAI 的厂商）申请的 API Key
-4. （可选）勾选「双语输出」，这样每句字幕会同时保留原文和译文
-5. 点击「开始翻译」
-
-#### 支持的 API 厂商
-
-任何提供 OpenAI 兼容接口的服务都可以，常见有：
-
-- DeepSeek (`https://api.deepseek.com/v1`)
-- 阿里云百炼 (`https://dashscope.aliyuncs.com/compatible-mode/v1`)
-- 硅基流动 (`https://api.siliconflow.cn/v1`)
-- 本地 Ollama (`http://localhost:11434/v1`)
-- OpenAI 官方
-
-> **注意**：API Key 只保存在本地配置文件里，不会上传到任何地方。
-
----
-
-## 输出文件说明
-
-所有输出文件都生成在**输入文件所在的同一个文件夹**里，文件名以输入文件名为前缀。
-
-命名规则（CLI，2026-07 起）：**终稿**占最简名——源语终稿 `video.srt`，翻译终稿 `video_<语言>.srt`（如 `_chs`）；**中间产物**三段式 `video_<阶段>_<模型>.srt`。
-
-假设你的输入文件叫 `video.mp4`：
-
-| 文件 | 说明 | 生成条件 |
-|------|------|---------|
-| `video.srt` | **源语终稿**：对齐+后处理完成的字幕，时间轴最准，通常这就是你要的最终结果 | 流水线跑完必生成，不会被翻译覆盖 |
-| `video_chs.srt` | **翻译终稿**：默认双语（原文+译文），`--no-bilingual` 时为单语译文；后缀随目标语言变化 | 开 AI 翻译时生成，与源语终稿并存 |
-| `video_original_whisper-large-v3.srt` | Whisper 原始识别结果（未对齐），模型段随所选模型 | `--keep-whisper-srt` 时保留 |
-| `video_aligned_mms_fa.srt` | 强制打轴后、未做最终后处理留档的对齐版，模型段随对齐模型 | `--keep-aligned-srt` 时保留 |
-| `video_review.srt` | 校对版 SRT：低置信词用 `【?词】` 包裹，低置信句用 `【】` 包裹 | 开 Review 且存在低置信内容时生成 |
-| `video_review.ass` | 校对版 ASS 字幕：低置信词显示为红色高亮，可直接拖进播放器预览 | 同上 |
-| `video_dialog/_effects/_music.wav` | TIGER 分离的中间音轨 | 降噪且「保存中间音轨」时生成 |
-| `video_spk1/_spk2.wav` | 说话人分轨后的音频 | 分轨且「保存中间音轨」时生成 |
-
-单步命令的默认输出同规则：`transcribe` → `_original_whisper-<模型>.srt`；`align` → `_aligned_<模型>.srt`；`translate` → `_<语言>.srt`（如 `_chs.srt`）。GUI 输出框的自动填名维持旧样式。
-
-**我该用哪个字幕文件？**
-
-- 只要时间轴准确的日文字幕 → `video.srt`
-- 要中文/双语 → 开 AI 翻译，拿 `video_chs.srt`（日文轴照样在 `video.srt`）
-- 要校对哪些地方机器可能识别错了 → 打开 `video_review.ass` 边看边改
-
----
-
-## 模型下载
-
-首次运行需要联网下载 AI 模型。下载一次后自动缓存到本地，后续不再重复下载。
-
-### 各模型用途与大小
-
-| 模型 | 用途 | 大小 | 缓存位置 |
-|------|------|------|---------|
-| `Systran/faster-whisper-large-v3` | 语音识别 | ~1.5 GB | `~/.cache/huggingface/hub/` |
-| `MMS_FA` (torchaudio 内置) | 强制打轴 | ~1.2 GB | `~/.cache/torch/hub/` |
-| `TIGER-DnR` | 降噪 | ~1 GB | 项目文件夹下的 `cache/` |
-| `TIGER-Speech` | 说话人分轨 | ~1 GB | 项目文件夹下的 `cache/` |
-| `Qwen3-ForcedAligner` | 强制打轴（可选） | ~1.2 GB | `~/.cache/huggingface/hub/` |
-
-> `~` 表示你的用户主目录，Windows 上通常是 `C:\Users\你的用户名`。
->
-> TIGER 的两个模型不在用户主目录，而是下载到 WritanSub 项目文件夹里的 `cache/` 子文件夹。
-
-### 下载方式
-
-#### 方式一：自动下载（推荐）
-
-直接启动程序即可。程序会检测网络环境：
-
-- 如果能直接访问 `huggingface.co`，就从官方下载
-- **如果访问不了，会自动切换到国内镜像 `https://hf-mirror.com`**
-
-无需手动设置任何环境变量。
-
-#### 方式二：手动设置镜像（国内网络不稳定时）
-
-如果你发现自动下载很慢，可以在启动前手动设置环境变量：
-
-**Windows（cmd）：**
-```cmd
-set HF_ENDPOINT=https://hf-mirror.com
-python -m writansub
-```
-
-**Windows（PowerShell）：**
-```powershell
-$env:HF_ENDPOINT="https://hf-mirror.com"
-python -m writansub
-```
-
-#### 方式三：离线下载
-
-如果电脑完全不能联网，可以找一台能联网的机器先下载好模型，再复制过来：
-
-1. 在能联网的机器上运行一次程序，让模型自动下载
-2. 把整个 `C:\Users\用户名\.cache\huggingface\hub\` 文件夹复制到目标机器的对应位置
-3. 同样复制 `~/.cache/torch/hub/`（MMS_FA 模型）
-4. 如果用到降噪或说话人分轨，再把 WritanSub 项目文件夹里的 `cache/` 复制到目标机器项目文件夹的同一位置（TIGER 模型）
+> **国内用户注意**：程序内置 Hugging Face 镜像自动切换，访问不了 `huggingface.co` 时自动改用 `hf-mirror.com`，无需手动设置。
 
 ---
 
 ## CLI 命令行参考
-
-如果你习惯用命令行，或者想批量处理/写脚本，可以使用 `writansub-cli`。
 
 ### 全局选项
 
@@ -375,6 +123,12 @@ writansub-cli --version          # 查看版本
 writansub-cli <command> --help   # 查看某个命令的详细参数
 ```
 
+**参数优先级：** 命令行参数 > `--config` JSON 文件 > 内置默认值。
+
+**取消：** `Ctrl+C` 一次发出取消请求（降噪、对齐阶段毫秒级停下，识别阶段在当前片段结束后停下），再按一次强制退出。已写到磁盘的文件都会保留。
+
+**进度与日志** 输出到 stderr；字幕内容只写文件，不走 stdout。
+
 ### 1. pipeline — 完整流水线
 
 ```bash
@@ -382,7 +136,7 @@ writansub-cli <command> --help   # 查看某个命令的详细参数
 writansub-cli pipeline video.mp4
 
 # 完整用法：预处理 → 转录 → 对齐 → 翻译 + 生成 review
-writansub-cli pipeline video.mp4 --denoise --translate --review
+writansub-cli pipeline video.mp4 --denoise --translate --review --api-key sk-xxx
 
 # 批量处理多个文件
 writansub-cli pipeline a.mp4 b.mp4 c.mp4 --review
@@ -423,7 +177,7 @@ writansub-cli pipeline video.mkv --ref-sub-track 0
 | `--align-model` | 对齐模型 (`mms_fa`/`qwen3-fa-0.6b`) | `mms_fa` |
 | `--vad` | 启用 VAD 跳过静音 | 不启用 |
 | `--no-cond-prev` | 禁用前文调优 | 启用 |
-| `--initial-prompt` | 初始提示词 | 无 |
+| `--initial-prompt` | 初始提示词（人名/术语，空格分隔） | 无 |
 | `--denoise` | 启用 DnR 降噪 | 不启用 |
 | `--separate` | 启用说话人分离（含降噪） | 不启用 |
 | `--mss-model` | 降噪模型 (`tiger-dnr`/`htdemucs_ft`/`htdemucs`) | `tiger-dnr` |
@@ -438,6 +192,9 @@ writansub-cli pipeline video.mkv --ref-sub-track 0
 | `--no-bilingual` | 翻译终稿输出单语译文 | 默认双语 |
 | `--keep-whisper-srt` | 保留原始识别 SRT（`_original_whisper-<模型>.srt`） | 不保留 |
 | `--keep-aligned-srt` | 保留对齐 SRT（`_aligned_<模型>.srt`） | 不保留 |
+| `--config` | JSON 配置文件（见第 7 节） | 无 |
+
+翻译相关参数（`--api-base`、`--api-key`、`--llm-model`、`--target-lang`、`--batch-size`）与 `translate` 子命令相同，见第 5 节。后处理参数见第 6 节。
 
 ### 2. preprocess — 音频预处理
 
@@ -451,6 +208,8 @@ writansub-cli preprocess video.mp4 --separate
 # 批量处理
 writansub-cli preprocess a.mp4 b.mp4 --separate --device cuda
 ```
+
+必须指定 `--denoise` 或 `--separate` 至少一个，`--separate` 隐含 `--denoise`。输出在原文件同目录，文件名带 `_dnr`（降噪后）或 `_speech`（分轨后）。
 
 ### 3. transcribe — 语音识别
 
@@ -468,6 +227,18 @@ writansub-cli transcribe video.mp4 --vad --initial-prompt "瀬尾拓也 伊地�
 writansub-cli transcribe video.mp4 --word-conf-threshold 0.6
 ```
 
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `files` | (必填) | 一个或多个媒体文件；多文件时同进程内复用模型 |
+| `-o/--output` | `_original_whisper-<模型>.srt` | 输出路径（**仅单文件时可用**；多文件时自动按三段式命名） |
+| `--lang` | `ja` | 识别语言 |
+| `--whisper-model` | `large-v3` | Whisper 模型 |
+| `--compute-type` | `int8` | Whisper 量化档 |
+| `--vad` | 不启用 | VAD 跳过静音段 |
+| `--no-cond-prev` | 启用 | 禁用前文调优 |
+| `--initial-prompt` | 无 | Whisper 初始提示（**只影响前 30 s 窗口**，对长视频效果有限） |
+| `--word-conf-threshold` | 0.5 | 识别置信阈值（低于此值标记为低置信） |
+
 ### 4. align — 强制打轴
 
 ```bash
@@ -481,14 +252,24 @@ writansub-cli align --audio a.mp4 b.mp4 --srt a.srt b.srt
 writansub-cli align --audio video.mp4 --srt input.srt --align-model qwen3-fa-0.6b
 ```
 
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--audio` | (必填) | 一个或多个音频/视频文件 |
+| `--srt` | (必填) | 一个或多个 SRT 路径，**与 `--audio` 按位置一一对应**，数量必须相等 |
+| `-o/--output` | `_aligned_<模型>.srt` | 输出路径（**仅单对时可用**；多对时自动按三段式命名） |
+| `--align-model` | `mms_fa` | 对齐模型 (`mms_fa`/`qwen3-fa-0.6b`) |
+| `--config` | 无 | JSON 配置文件 |
+
+> transcribe 与 align 的多文件批处理在同一进程内只加载一次模型，12 集任务比逐集独立调用省约 3 分钟模型加载时间。
+
 ### 5. translate — AI 翻译
 
 ```bash
 # 翻译为简体中文
-writansub-cli translate subtitle.srt --target-lang 简体中文
+writansub-cli translate subtitle.srt --api-key sk-xxx
 
 # 双语输出
-writansub-cli translate subtitle.srt --bilingual
+writansub-cli translate subtitle.srt --api-key sk-xxx --bilingual
 
 # 指定自定义 API
 writansub-cli translate subtitle.srt \
@@ -497,9 +278,47 @@ writansub-cli translate subtitle.srt \
   --llm-model Qwen/Qwen2.5-72B-Instruct
 ```
 
-### 6. 通过配置文件批量设置参数
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `file` | (必填) | SRT 字幕文件 |
+| `-o/--output` | `_<语言>.srt`（如 `_chs.srt`） | 输出路径 |
+| `--bilingual` | 不启用 | 双语输出（原文 + 译文） |
+| `--api-base` | `https://api.deepseek.com/v1` | API 地址 |
+| `--api-key` | 无 | API Key |
+| `--llm-model` | `deepseek-chat` | LLM 模型名 |
+| `--target-lang` | `简体中文` | 目标语言 |
+| `--batch-size` | 20 | 每批翻译条数 |
+| `--config` | 无 | JSON 配置文件 |
 
-你可以把常用的参数写进一个 JSON 文件，避免每次都在命令行里敲：
+任何提供 OpenAI 兼容接口的服务都可以：DeepSeek、阿里云百炼（`https://dashscope.aliyuncs.com/compatible-mode/v1`）、硅基流动（`https://api.siliconflow.cn/v1`）、本地 Ollama（`http://localhost:11434/v1`）、OpenAI 官方。
+
+> **API 设置不再持久化。** 每次运行都要经 `--api-key` 或 `--config` 文件传入；想少敲几个参数就把它们写进配置文件（第 7 节）。
+
+### 6. 后处理参数（pipeline / align 共用）
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--extend-end` | 0.30 | 字幕向后延伸秒数 |
+| `--extend-start` | 0.00 | 字幕向前延伸秒数 |
+| `--gap-threshold` | 0.50 | 间距阈值：原始间距大于此值时保留最小间距，小于则前一条延伸到下一条开头 |
+| `--min-gap` | 0.30 | 相邻字幕最小间距 |
+| `--min-duration` | 0.30 | 最小字幕时长（不足则向前合并到上一条） |
+| `--pad-sec` | 0.50 | 对齐窗口两侧余量；增大可提高对齐成功率，减小可提高精度 |
+| `--word-conf-threshold` | 0.50 | 识别置信阈值（低于此值的词在 review 里标 `【?词】`，0 禁用） |
+| `--align-conf-threshold` | 0.50 | 对齐置信阈值（低于此值的句在 review 里整句 `【】` 包裹，0 禁用） |
+
+两套实测预设：
+
+- **Fansub 风格（默认，不传参数即是）** — 字幕组紧凑型，cue 紧贴说话边界：
+  `--extend-start 0.00 --extend-end 0.30 --min-gap 0.30 --gap-threshold 0.50 --min-duration 0.30 --pad-sec 0.50`
+- **商业风格（Crunchyroll / Netflix）** — 前后留大量余量，显示时长长：
+  `--extend-start 0.30 --extend-end 0.50 --min-gap 0.12 --gap-threshold 0.50 --min-duration 0.50 --pad-sec 0.50`
+
+全部归零（`--extend-start 0 --extend-end 0 --min-gap 0 --gap-threshold 0 --min-duration 0 --pad-sec 0`）只用于测试原始对齐质量，生成的字幕不要直接拿来观看。
+
+### 7. 通过配置文件批量设置参数
+
+把常用参数写进 JSON，避免每次在命令行里敲：
 
 **`myconfig.json`：**
 ```json
@@ -519,6 +338,71 @@ writansub-cli translate subtitle.srt \
 ```bash
 writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 ```
+
+---
+
+## 输出文件说明
+
+所有输出文件都生成在**输入文件所在的同一个文件夹**里，文件名以输入文件名为前缀。
+
+命名规则：**终稿**占最简名——源语终稿 `video.srt`，翻译终稿 `video_<语言>.srt`（如 `_chs`）；**中间产物**三段式 `video_<阶段>_<模型>.srt`。
+
+假设输入文件叫 `video.mp4`：
+
+| 文件 | 说明 | 生成条件 |
+|------|------|---------|
+| `video.srt` | **源语终稿**：对齐 + 后处理完成的字幕，时间轴最准，通常这就是最终结果 | 流水线跑完必生成，不会被翻译覆盖 |
+| `video_chs.srt` | **翻译终稿**：默认双语（原文 + 译文），`--no-bilingual` 时为单语译文；后缀随目标语言变化 | `--translate` 时生成，与源语终稿并存 |
+| `video_original_whisper-large-v3.srt` | Whisper 原始识别结果（未对齐），模型段随所选模型 | `--keep-whisper-srt` 时保留 |
+| `video_aligned_mms_fa.srt` | 强制打轴后、未做最终后处理留档的对齐版，模型段随对齐模型 | `--keep-aligned-srt` 时保留 |
+| `video_review.srt` | 校对版 SRT：低置信词用 `【?词】` 包裹，低置信句用 `【】` 包裹 | `--review` 且存在低置信内容时生成 |
+| `video_review.ass` | 校对版 ASS 字幕：低置信词显示为红色高亮，可直接拖进播放器预览 | 同上 |
+| `video_dialog/_effects/_music.wav` | TIGER 分离的中间音轨 | `--denoise --save-intermediate` 时生成 |
+| `video_spk1/_spk2.wav` | 说话人分轨后的音频 | `--separate --save-intermediate` 时生成 |
+
+单步命令的默认输出同规则：`transcribe` → `_original_whisper-<模型>.srt`；`align` → `_aligned_<模型>.srt`；`translate` → `_<语言>.srt`（如 `_chs.srt`）。
+
+**该用哪个字幕文件？**
+
+- 只要时间轴准确的日文字幕 → `video.srt`
+- 要中文/双语 → 开 `--translate`，拿 `video_chs.srt`（日文轴照样在 `video.srt`）
+- 要校对哪些地方机器可能识别错了 → 打开 `video_review.ass` 边看边改
+
+---
+
+## 模型下载
+
+首次运行需要联网下载 AI 模型。下载一次后自动缓存到本地，后续不再重复下载。
+
+### 各模型用途与大小
+
+| 模型 | 用途 | 大小 | 缓存位置 |
+|------|------|------|---------|
+| `Systran/faster-whisper-large-v3` | 语音识别 | ~1.5 GB | `~/.cache/huggingface/hub/` |
+| `MMS_FA` (torchaudio 内置) | 强制打轴 | ~1.2 GB | `~/.cache/torch/hub/` |
+| `TIGER-DnR` | 降噪 | ~1 GB | 项目文件夹下的 `cache/` |
+| `TIGER-Speech` | 说话人分轨 | ~1 GB | 项目文件夹下的 `cache/` |
+| `Qwen3-ForcedAligner` | 强制打轴（可选） | ~1.2 GB | `~/.cache/huggingface/hub/` |
+
+> `~` 表示用户主目录，Windows 上通常是 `C:\Users\你的用户名`。TIGER 的两个模型不在用户主目录，而是下载到项目文件夹里的 `cache/` 子文件夹。
+
+### 下载方式
+
+**方式一：自动下载（推荐）。** 直接运行任一命令即可。程序会检测网络环境：能直接访问 `huggingface.co` 就从官方下载，访问不了会自动切换到国内镜像 `https://hf-mirror.com`，无需手动设置环境变量。
+
+**方式二：手动设置镜像（国内网络不稳定时）。** 在运行前设置环境变量：
+
+```cmd
+set HF_ENDPOINT=https://hf-mirror.com
+uv run writansub-cli pipeline video.mp4
+```
+
+```powershell
+$env:HF_ENDPOINT="https://hf-mirror.com"
+uv run writansub-cli pipeline video.mp4
+```
+
+**方式三：离线下载。** 电脑完全不能联网时，找一台能联网的机器先跑一次让模型下好，然后把 `C:\Users\用户名\.cache\huggingface\hub\`、`~/.cache/torch/hub/`（MMS_FA）复制到目标机器的对应位置；用到降噪或分轨时再把项目文件夹里的 `cache/` 复制到目标机器项目文件夹的同一位置（TIGER 模型）。
 
 ---
 
@@ -548,33 +432,19 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 **原因**：国内访问 PyPI 或 Hugging Face 较慢。
 
 **解决**：
-1. 依赖默认从官方 PyPI 下载（清华镜像对部分包持续返回 403，已不再作为默认源）。下载慢或卡住时，请开启系统代理后重新执行 `uv sync`。
+1. 依赖默认从官方 PyPI 下载（清华镜像对部分包持续返回 403，已不再作为默认源）。下载慢或卡住时，请开启系统代理后重新执行 `uv sync`
 2. Hugging Face 模型下载由程序自动处理镜像，安装阶段不需要担心
 
----
+### 二、运行阶段
 
-### 二、启动阶段
-
-#### Q4：双击 `WritanSub.bat` 后闪一下就没了
-
-**原因**：通常是 Python 环境没装好，或者依赖缺失。
-
-**解决**：
-1. 不要双击，改为在 cmd 里手动运行，看具体报错：
-   ```bash
-   cd /d D:\WritanSub
-   uv run python -m writansub
-   ```
-2. 如果报错 `ModuleNotFoundError: No module named 'xxx'`，说明依赖没装全，重新执行 `uv sync`
-
-#### Q5：提示 `CUDA out of memory`（显存不足）
+#### Q4：提示 `CUDA out of memory`（显存不足）
 
 **原因**：显卡显存不够加载当前模型。
 
 **解决**：
-1. **换小模型**：把 Whisper 模型从 `large-v3` 换成 `medium` 或 `small`
+1. **换小模型**：`--whisper-model medium` 或 `small`
 2. **关闭预处理**：TIGER 降噪和分离也会占显存，显存 <6 GB 时不建议同时开
-3. **用 CPU**：虽然慢，但不会爆显存
+3. **用 CPU**：`--device cpu`，虽然慢，但不会爆显存
 4. **分段处理**：把长视频切成几段分别处理
 
 **各模型显存参考：**
@@ -589,62 +459,55 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 | Qwen3-FA-0.6B | ~2 GB |
 | TIGER-DnR | ~2 GB |
 
-#### Q6：首次启动时下载模型失败，提示连接超时
+#### Q5：首次运行时下载模型失败，提示连接超时
 
 **原因**：网络访问 Hugging Face 不稳定。
 
 **解决**：
 1. 程序已内置自动镜像切换，通常不需要干预。如果还是失败：
-2. 手动设置镜像后重启：
+2. 手动设置镜像后重跑：
    ```cmd
    set HF_ENDPOINT=https://hf-mirror.com
-   uv run python -m writansub
+   uv run writansub-cli pipeline video.mp4
    ```
 3. 或者参考「模型下载」里的「离线下载」方式
 
----
-
-### 三、运行阶段
-
-#### Q7：语音识别结果里人名/术语总是错的
+#### Q6：语音识别结果里人名/术语总是错的
 
 **解决**：
-1. 在「初始提示」里输入正确的人名写法（空格分隔）
-2. 勾选「启用前文调优」，让后面的句子继承前面的写法
+1. 用 `--initial-prompt "正确写法1 正确写法2"` 给出人名、术语（空格分隔）
+2. 前文调优默认开启（后面的句子继承前面的写法），不要传 `--no-cond-prev`
 3. 如果某句话本身发音模糊，机器确实会猜错，需要人工校对
 
-#### Q8：对齐后的字幕时间轴还是有偏差
+#### Q7：对齐后的字幕时间轴还是有偏差
 
 **解决**：
-1. 增大「对齐窗口余量」（比如从 0.5 改到 1.0）
-2. 检查输入音频是否经过 TIGER 预处理（降噪后的干净人声对齐更准）
-3. 尝试换用 `qwen3-fa-0.6b` 对齐模型
+1. 增大对齐窗口余量，如 `--pad-sec 1.0`
+2. 检查输入音频是否经过 TIGER 预处理（`--denoise` 后的干净人声对齐更准）
+3. 尝试 `--align-model qwen3-fa-0.6b`
 4. 如果原片本身语速极快、大量叠音，任何自动对齐都会有极限，需要手动微调
 
-#### Q9：AI 翻译结果质量不好
+#### Q8：AI 翻译结果质量不好
 
 **解决**：
-1. 换更强的模型（如 `deepseek-chat` → `deepseek-reasoner`）
-2. 调整 `batch_size`：太小会导致上下文不连贯，太大可能导致模型理解偏差，建议 10~30 之间
-3. 先用 Whisper 出日文 → 人工简单校对 → 再跑翻译，效果会比直接翻译错识别文本好得多
+1. 换更强的模型（如 `--llm-model deepseek-reasoner`）
+2. 调整 `--batch-size`：太小会导致上下文不连贯，太大可能导致模型理解偏差，建议 10~30 之间
+3. 先用 Whisper 出日文 → 人工简单校对 → 再跑 `translate`，效果比直接翻译错识别文本好得多
 4. 某些专业术语、梗、双关语，AI 翻译必然翻车，必须人工润色
 
-#### Q10：处理到一半想暂停/取消
+#### Q9：处理到一半想取消
 
 **解决**：
-1. GUI 里直接点「暂停」按钮，再次点击恢复
-2. GUI 里点「取消任务」，或 CLI 里按 `Ctrl + C`：降噪和对齐阶段会立即停下，语音识别阶段会在当前片段识别完后停下。CLI 里再按一次 `Ctrl + C` 强制退出
-3. 已经写到磁盘的文件都会保留。注意流水线是按阶段处理整批文件的：在识别或对齐阶段取消，这一批都还没有终稿（`video.srt`）；在翻译阶段取消，源语终稿已经写好，不会丢
+1. 按 `Ctrl + C`：降噪和对齐阶段会立即停下，语音识别阶段会在当前片段识别完后停下。再按一次 `Ctrl + C` 强制退出
+2. 已经写到磁盘的文件都会保留。注意流水线是按阶段处理整批文件的：在识别或对齐阶段取消，这一批都还没有终稿（`video.srt`）；在翻译阶段取消，源语终稿已经写好，不会丢
 
-#### Q11：输出文件在哪里？
+#### Q10：输出文件在哪里？
 
-**答**：所有输出文件都在**你选择的输入文件所在的同一个文件夹**里。例如你选了 `D:\视频\demo.mp4`，那么 `demo.srt`、`demo_review.srt` 等都会生成在 `D:\视频\` 文件夹里。
+**答**：所有输出文件都在**输入文件所在的同一个文件夹**里。例如输入 `D:\视频\demo.mp4`，那么 `demo.srt`、`demo_review.srt` 等都会生成在 `D:\视频\` 文件夹里。
 
----
+### 三、CLI 阶段
 
-### 四、CLI 阶段
-
-#### Q12：运行 `writansub-cli` 提示找不到命令
+#### Q11：运行 `writansub-cli` 提示找不到命令
 
 **原因**：虚拟环境没有激活。
 
@@ -653,7 +516,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 2. 如果用 venv：先运行 `.venv\Scripts\activate`，再运行 `writansub-cli ...`
 3. 或者直接用 Python 模块方式：`python -m writansub.cli ...`
 
-#### Q13：批量处理时 `-o` 参数报错
+#### Q12：批量处理时 `-o` 参数报错
 
 **原因**：`-o/--output` 只在单文件时有效。
 
@@ -665,7 +528,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 主要技术栈：
 
-- Python 3.12 + PySide6（GUI）
+- Python 3.12，命令行入口 `writansub/cli.py`
 - faster-whisper（语音识别；另有实验性的 Qwen3-ASR 后端，尚未接入 CLI）
 - torchaudio + MMS_FA / Qwen3（强制对齐）
 - TIGER / Demucs（音频预处理）
@@ -677,6 +540,8 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 uv run pytest
 ```
 
+设计与迁移存档在 `docs/`。GUI（PySide6）与打包链已退役，代码在 `archive/` 下按时间归档，不再维护。
+
 ---
 
 ## 项目结构
@@ -685,10 +550,10 @@ uv run pytest
 WritanSub/
 ├── writansub/
 │   ├── cli.py                # 命令行入口（writansub-cli）
-│   ├── types.py              # 公共数据类型、常量
+│   ├── types.py              # 公共数据类型
 │   ├── paths.py              # 统一路径管理
-│   ├── config.py             # 配置读写
-│   ├── bridge.py             # 进程与模型资源管理（子进程/取消/暂停）
+│   ├── config.py             # 后处理 / 翻译默认参数
+│   ├── bridge.py             # 进程与模型资源管理（子进程/取消）
 │   ├── logger.py             # 会话日志
 │   ├── network.py            # Hugging Face 镜像自动切换
 │   ├── preprocess/           # TIGER / Demucs 音频预处理
@@ -697,16 +562,13 @@ WritanSub/
 │   ├── translate/            # AI 翻译
 │   ├── subtitle/             # 字幕处理（SRT 读写、内嵌字幕提取、参考轴映射、置信度审查）
 │   ├── pipeline/             # 流水线编排
-│   ├── gui/                  # PySide6 界面
 │   └── vendor/tiger/         # 第三方 TIGER 模型代码
 ├── tests/                    # pytest 测试
-├── build/                    # 打包脚本、安装器、启动器
 ├── docs/                     # 设计与迁移存档
-├── archive/                  # 已退役代码归档
+├── archive/                  # 已退役代码归档（GUI、打包链、Rust 原生层、TTS）
 ├── pyproject.toml
 ├── uv.lock                   # 依赖锁（安装以它为准）
 ├── requirements.txt          # 仅供参考，不用于安装
-├── WritanSub.bat             # Windows GUI 启动脚本
 ├── WritanSubCLI.bat          # Windows CLI 启动脚本
 ├── LICENSE                   # GPL-3.0 许可证全文
 └── CHANGELOG.md              # 版本更新记录

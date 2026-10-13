@@ -15,7 +15,7 @@ keywords = ["subtitle", "whisper", "translation", "audio", "speech-recognition",
 requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 4 - Beta",
-    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -37,12 +37,10 @@ dependencies = [
     "pypinyin",
     "unidecode",
     "korean-romanizer",
-    "PySide6>=6.5.0",
     "imageio-ffmpeg",
     "qwen-asr",
     "demucs",
     "silero-vad>=5.1",
-    "platformdirs>=3.0.0",
 ]
 
 [project.urls]
@@ -51,7 +49,6 @@ Repository = "https://github.com/mtmfs/WritanSub"
 Issues = "https://github.com/mtmfs/WritanSub/issues"
 
 [project.scripts]
-writansub = "writansub.gui.app:main"
 writansub-cli = "writansub.cli:main"
 
 [tool.hatch.build.targets.wheel]

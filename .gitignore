@@ -3,13 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 dist/
-build/cache/
-build/dist/
-build/release/
-build/wheels/
-build/launcher/target/
-build/requirements.lock.txt
-build/*.tar
+build/
 *.egg-info/
 *.spec
 .claude/
@@ -29,14 +23,8 @@ htmlcov/
 .mypy_cache/
 .ipynb_checkpoints/
 
-# GUI 运行时缓存 & 用户配置
-writansub_pp.json
-writansub_translate.json
-gui_state.json
-
 # 本地工具脚本
 push.bat
-push_pyside6.bat
 *.fast.bat
 
 # 模型缓存
@@ -47,7 +35,6 @@ logs/
 
 # 临时文档 & 草稿
 Audit_Report_*.txt
-Compact_GUI_Layout_Proposal.html
 方案*.txt
 
 # 内部工作文档（审计/批次/复盘报告、缺陷清单、AI 工作计划）

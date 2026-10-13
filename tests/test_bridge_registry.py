@@ -40,14 +40,6 @@ def test_checkpoint_cancel_and_reset(registry):
     registry.checkpoint()  # 复位后不再抛
 
 
-def test_pause_flag(registry):
-    registry.pause()
-    assert registry.paused
-    registry.resume()
-    assert not registry.paused
-    registry.checkpoint()
-
-
 def test_resolve_device_cuda_fallback(monkeypatch):
     """T40：请求 cuda 但不可用时回退 cpu 并知会。"""
     import torch

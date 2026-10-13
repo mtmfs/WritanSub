@@ -128,10 +128,8 @@ class ResourceRegistry:
         self._model_handles: dict[tuple[str, str], int] = {}
         self._procs: set[subprocess.Popen] = set()
         self._cancelled = False
-        self._pause_event = threading.Event()
-        self._pause_event.set()
 
-    # ── 取消 / 暂停 ──
+    # ── 取消 ──
 
     @property
     def cancelled(self) -> bool:
@@ -153,22 +151,10 @@ class ResourceRegistry:
             except OSError:
                 pass
 
-    def pause(self) -> None:
-        self._pause_event.clear()
-
-    def resume(self) -> None:
-        self._pause_event.set()
-
-    @property
-    def paused(self) -> bool:
-        return not self._pause_event.is_set()
-
     def reset_controls(self) -> None:
         self._cancelled = False
-        self._pause_event.set()
 
     def checkpoint(self) -> None:
-        self._pause_event.wait()
         if self._cancelled:
             raise CancelledError("任务已取消")
 
@@ -326,7 +312,6 @@ class ResourceRegistry:
     def shutdown(self) -> None:
         log.info("Shutdown initiated...")
         self.cancelled = True  # property：顺带 kill 所有活子进程
-        self._pause_event.set()
         with self._lock:
             self._models.clear()
             self._model_handles.clear()

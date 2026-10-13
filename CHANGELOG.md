@@ -8,9 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ## [Unreleased]
 
 ### Changed
-- **听写后端接口化**：新增 `Recognizer` 协议与 `Transcript` / `Segment` 类型，faster-whisper 收进 `transcribe/whisper.py` 适配器；`PipelineConfig` 以 `asr` 字段持有识别器，runner 与 CLI 不再直接引用 Whisper 参数、缓存键和产物命名。CLI 旗标、产物文件名、模型缓存键均不变。`WordInfo` 新增可选词时间 start/end，probability 允许为空，review 跳过无概率的词。GUI 未改：识别页经 `transcribe/core.py` 兼容壳照常可用，流水线页需随 GUI 重做更新。
+- **听写后端接口化**：新增 `Recognizer` 协议与 `Transcript` / `Segment` 类型，faster-whisper 收进 `transcribe/whisper.py` 适配器；`PipelineConfig` 以 `asr` 字段持有识别器，runner 与 CLI 不再直接引用 Whisper 参数、缓存键和产物命名。CLI 旗标、产物文件名、模型缓存键均不变。`WordInfo` 新增可选词时间 start/end，probability 允许为空，review 跳过无概率的词。GUI 随后整体删除，见 Removed。
 - **实验性 Qwen3-ASR 后端**：`transcribe/qwen.py` 以 Qwen3-ASR-1.7B 识别、项目已用的 Qwen3-ForcedAligner-0.6B 出词时间，`transcribe/segment.py` 按句末标点与长停顿切成字幕条（标点从全文对回对齐器输出的 token）；超长段在词边界里按停顿时长、顿号、两半均衡打分选切点，不在助词或助动词前切。对齐器给出的单词时长超过 `max_word_seconds`（默认 3 s）即截断，避免配乐段里几个字的字幕条拖到二十多秒。尚未接入 CLI，仅供 `PipelineConfig(asr=QwenRecognizer())` 或脚本调用对比。
 - **识别器自带对齐轴时跳过强制对齐**：`Segment.time_kind` 新增 `aligned`；某文件的识别结果全部已对齐且未经参考字幕映射时，runner 跳过 MMS/Qwen3 强制对齐阶段，review 行级阈值与参考轴直通同样置零。
+
+### Removed
+- **GUI 整体删除（架构批第一步）**：PySide6 界面、`python -m writansub` 入口与 `writansub` 脚本入口、`WritanSub.bat`、NVIDIA 驱动检查弹窗、任务暂停/恢复、GUI 持久化配置（后处理参数、翻译 API 设置、窗口状态）全部移除，代码归档至 `archive/gui_pyside6_202610/`。CLI 不受影响：`writansub-cli` 旗标与产物命名不变；翻译 API 设置改为每次经 `--api-key` / `--config` 传入，`%LOCALAPPDATA%\mtmfs\WritanSub\` 下的旧配置文件不再读取，可手动删除。
+- 依赖移除 `PySide6`、`platformdirs`。
+- 打包链（Inno 安装器、Rust 启动器、`build/scripts/*.ps1`）停止维护，归档至 `archive/build_chain_202610/`；安装方式只保留 `uv sync`。
+- `transcribe/core.py` 兼容壳（仅 GUI 识别页使用）随 GUI 归档。
 
 ### Fixed
 - **separate 模式重叠区丢台词**：原先只重识别两人同时说话的片段，却把与之相交的整条原字幕删掉，片段以外的台词随之丢失。现在把相交的字幕和重叠区连成完整窗口再重识别；分离音轨盖不住整句、窗口过短或两条轨都没识别出文字时保留原字幕。

@@ -88,14 +88,3 @@ def test_name_tag_cache_key():
     assert rec.tag() == "whisper-medium"
     assert rec.cache_key() == "whisper:medium:float16"
     assert WhisperRecognizer().cache_key() == "whisper:large-v3:int8"
-
-
-def test_core_shim_delegates(registry):
-    from writansub.transcribe.core import transcribe
-    model = FakeModel([_seg(0.0, 1.0, "  a  ", [_word("a", 0.5)])])
-    subs, words = transcribe("d.wav", lang="en", model=model, vad_filter=True, initial_prompt="")
-    assert subs[0].text == "a"
-    assert words == [[WordInfo("a", 0.5)]]
-    assert model.kwargs["language"] == "en"
-    assert model.kwargs["vad_filter"] is True
-    assert model.kwargs["initial_prompt"] is None

@@ -44,7 +44,6 @@ def _setup_cancel_handler() -> None:
             sys.stderr.write("\n强制退出\n")
             sys.exit(1)
         reg.cancelled = True
-        reg.resume()
         sys.stderr.write("\n取消请求已发送，将在当前段结束后停止\n")
 
     signal.signal(signal.SIGINT, _handler)
