@@ -28,10 +28,32 @@ def test_transcribe_compute_type():
 
 def test_pipeline_config_defaults():
     from writansub.pipeline.runner import PipelineConfig
+    from writansub.transcribe.whisper import WhisperRecognizer
     cfg = PipelineConfig()
-    assert cfg.compute_type == "int8"
+    assert isinstance(cfg.asr, WhisperRecognizer)
+    assert cfg.asr.cache_key() == "whisper:large-v3:int8"
+    assert cfg.asr is not PipelineConfig().asr
+    assert not hasattr(cfg, "compute_type") and cfg.keep_asr_srt is False
     assert cfg.overlap_mode == "merge"
     assert cfg.bilingual is True
+
+
+def test_cmd_pipeline_builds_whisper_recognizer(monkeypatch):
+    import writansub.cli as cli
+    import writansub.pipeline.runner as runner
+    captured = {}
+    monkeypatch.setattr(runner, "run_pipeline", lambda cfg, log, progress: captured.setdefault("cfg", cfg))
+    monkeypatch.setattr(cli, "_setup_cancel_handler", lambda: None)
+    args = build_parser().parse_args([
+        "pipeline", "x.mp4", "--compute-type", "float16", "--vad",
+        "--no-cond-prev", "--initial-prompt", "名前", "--keep-whisper-srt",
+    ])
+    cli.cmd_pipeline(args)
+    cfg = captured["cfg"]
+    assert cfg.asr.cache_key() == "whisper:large-v3:float16" and cfg.asr.tag() == "whisper-large-v3"
+    o = cfg.asr.options
+    assert (o.vad_filter, o.condition_on_previous_text, o.initial_prompt) == (True, False, "名前")
+    assert cfg.keep_asr_srt is True
 
 
 def test_ss_model_flag_removed():

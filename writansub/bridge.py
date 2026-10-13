@@ -62,8 +62,7 @@ def _resolve_torch_module(obj: Any) -> Any:
 def resolve_device(requested: str, log_callback=None) -> str:
     """请求 cuda 但 CUDA 不可用时回退 cpu 并知会调用方；其余原样返回。
 
-    必须在建模型（WhisperModel / init_qwen3_model 等）之前调用——
-    transcribe() 内部的 model is None 分支生产路径不可达（T40 首修教训）。
+    必须在建模型（Recognizer.load / init_qwen3_model 等）之前调用（T40 首修教训）。
     """
     if requested == "cuda":
         import torch

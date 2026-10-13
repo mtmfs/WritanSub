@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/).
 
+## [Unreleased]
+
+### Changed
+- **听写后端接口化**：新增 `Recognizer` 协议与 `Transcript` / `Segment` 类型，faster-whisper 收进 `transcribe/whisper.py` 适配器；`PipelineConfig` 以 `asr` 字段持有识别器，runner 与 CLI 不再直接引用 Whisper 参数、缓存键和产物命名。CLI 旗标、产物文件名、模型缓存键均不变。`WordInfo` 新增可选词时间 start/end，probability 允许为空，review 跳过无概率的词。GUI 未改：识别页经 `transcribe/core.py` 兼容壳照常可用，流水线页需随 GUI 重做更新。
+- **实验性 Qwen3-ASR 后端**：`transcribe/qwen.py` 以 Qwen3-ASR-1.7B 识别、项目已用的 Qwen3-ForcedAligner-0.6B 出词时间，`transcribe/segment.py` 按句末标点与长停顿切成字幕条（标点从全文对回对齐器输出的 token）；超长段在词边界里按停顿时长、顿号、两半均衡打分选切点，不在助词或助动词前切。对齐器给出的单词时长超过 `max_word_seconds`（默认 3 s）即截断，避免配乐段里几个字的字幕条拖到二十多秒。尚未接入 CLI，仅供 `PipelineConfig(asr=QwenRecognizer())` 或脚本调用对比。
+- **识别器自带对齐轴时跳过强制对齐**：`Segment.time_kind` 新增 `aligned`；某文件的识别结果全部已对齐且未经参考字幕映射时，runner 跳过 MMS/Qwen3 强制对齐阶段，review 行级阈值与参考轴直通同样置零。
+
+### Fixed
+- **separate 模式重叠区丢台词**：原先只重识别两人同时说话的片段，却把与之相交的整条原字幕删掉，片段以外的台词随之丢失。现在把相交的字幕和重叠区连成完整窗口再重识别；分离音轨盖不住整句、窗口过短或两条轨都没识别出文字时保留原字幕。
+- **参考字幕不可用时的结果丢失**：参考字幕读不出、视频没有字幕轨或参考字幕为空时，不再清空识别结果或静默跳过对齐，改为按文件保留识别结果并回退强制对齐。`--ref-direct` 只在该文件的识别字幕全部对上参考轴时才跳过对齐；没有识别结果时也不再把参考字幕的原文当成源语输出。
+- **对齐后字幕乱序**：逐句对齐可能改变相邻字幕的先后顺序，后处理此前只在 separate 模式排序，普通字幕会被压成 10 毫秒。现在所有字幕先按开始时间排序再贴合时间轴，并统一重编号。
+- 短字幕向前合并时保留两句中较低的对齐分数，对齐失败的短句不再被高分前句吞掉而漏出 review。
+- `writansub-cli --version` 显示 0.1.9：0.1.10 发版时漏改 `writansub/__init__.py`，已补齐。
+
 ## [0.1.10] - 2026-07-16 批次 8（内存批）
 
 ### Changed
@@ -14,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 ### Fixed
 - GUI 转录页 whisper 缓存键与 CLI/流水线格式不一致，同一模型在一个会话里会加载两份（各占 ~1.5GB）。
 
-
+## [0.1.9] - 2026-07-12 批次 5
 
 ### Changed
 - **镜像探测改经系统代理的 HTTPS 实测**（Clash 场景不再误判不可达，SNI 被重置不再误判可达）；探测超时 2s→5s，仅影响断网时的启动等待。

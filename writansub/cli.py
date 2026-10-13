@@ -142,6 +142,7 @@ def _resolve_translate(args: argparse.Namespace, file_cfg: dict) -> dict:
 def cmd_pipeline(args: argparse.Namespace) -> None:
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.pipeline.runner import PipelineConfig, run_pipeline
+    from writansub.transcribe.whisper import WhisperOptions, WhisperRecognizer
 
     file_cfg = _load_config_file(args.config)
     pp = _resolve_pp(args, file_cfg)
@@ -157,11 +158,14 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         media_files=args.files,
         lang=args.lang,
         device=args.device,
-        whisper_model=args.whisper_model,
+        asr=WhisperRecognizer(WhisperOptions(
+            model=args.whisper_model,
+            compute_type=args.compute_type,
+            condition_on_previous_text=not args.no_cond_prev,
+            vad_filter=args.vad,
+            initial_prompt=args.initial_prompt,
+        )),
         align_model=args.align_model,
-        condition_on_prev=not args.no_cond_prev,
-        vad_filter=args.vad,
-        initial_prompt=args.initial_prompt,
         tiger_mode=tiger_mode,
         mss_model=args.mss_model,
         save_intermediate=args.save_intermediate,
@@ -170,12 +174,11 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         use_ref_sub=args.ref_embedded or args.ref_sub_track is not None,
         ref_sub_track=args.ref_sub_track,
         ref_direct=args.ref_direct,
-        keep_whisper_srt=args.keep_whisper_srt,
+        keep_asr_srt=args.keep_whisper_srt,
         keep_aligned_srt=args.keep_aligned_srt,
         generate_review=args.review,
         translate=args.translate,
         bilingual=args.bilingual,
-        compute_type=args.compute_type,
         api_base=tr.get("api_base", TRANSLATE_DEFAULTS["api_base"]),
         api_key=tr.get("api_key", TRANSLATE_DEFAULTS["api_key"]),
         llm_model=tr.get("model", TRANSLATE_DEFAULTS["model"]),
@@ -250,7 +253,8 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
 
 def cmd_transcribe(args: argparse.Namespace) -> None:
     from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
-    from writansub.transcribe.core import transcribe as do_transcribe
+    from writansub.transcribe.base import to_subs
+    from writansub.transcribe.whisper import WhisperOptions, WhisperRecognizer
     from writansub.subtitle.srt_io import write_srt
     from writansub.subtitle.review import generate_review, write_review_files
 
@@ -266,30 +270,23 @@ def cmd_transcribe(args: argparse.Namespace) -> None:
     reg.reset_controls()
     device = resolve_device(args.device, _log)
 
-    def _w_factory():
-        from faster_whisper import WhisperModel
-        return WhisperModel(args.whisper_model, device=device, compute_type=args.compute_type)
-
-    wh = reg.acquire_model(
-        f"whisper:{args.whisper_model}:{args.compute_type}", device, _w_factory)
-    whisper_model = reg.get_model(wh)
+    rec = WhisperRecognizer(WhisperOptions(
+        model=args.whisper_model,
+        compute_type=args.compute_type,
+        condition_on_previous_text=not args.no_cond_prev,
+        vad_filter=args.vad,
+        initial_prompt=args.initial_prompt,
+    ))
+    wh = reg.acquire_model(rec.cache_key(), device, lambda: rec.load(device))
+    asr_model = reg.get_model(wh)
 
     try:
         for idx, media in enumerate(files, 1):
             if len(files) > 1:
                 _log(f"── [{idx}/{len(files)}] {os.path.basename(media)} ──")
-            output = args.output or stage_path(
-                os.path.splitext(media)[0], "original", "whisper-" + args.whisper_model)
+            output = args.output or stage_path(os.path.splitext(media)[0], "original", rec.tag())
 
-            subs, word_data = do_transcribe(
-                media, lang=args.lang, device=device,
-                log_callback=_log,
-                progress_callback=_progress_bar,
-                condition_on_previous_text=not args.no_cond_prev,
-                model=whisper_model,
-                vad_filter=args.vad,
-                initial_prompt=args.initial_prompt,
-            )
+            subs, word_data = to_subs(rec.transcribe(asr_model, media, args.lang, _progress_bar))
 
             if wc > 0.0:
                 srt_c, ass_c, low_c, tot_w = generate_review(subs, word_data, wc)

@@ -9,7 +9,8 @@ from writansub.bridge import ResourceRegistry, CancelledError, resolve_device
 from writansub.config import PP_DEFAULTS, TRANSLATE_DEFAULTS
 from writansub.subtitle.srt_io import parse_srt, write_srt, populate_romaji, merge_bilingual, stage_path, lang_code
 from writansub.subtitle.review import attach_low_words, generate_review_final, write_review_files
-from writansub.transcribe.core import transcribe
+from writansub.transcribe.base import Recognizer, is_aligned, to_subs
+from writansub.transcribe.whisper import WhisperRecognizer
 from writansub.translate.core import translate_subs
 from writansub.align.core import load_audio, run_alignment, post_process, init_model
 
@@ -19,17 +20,13 @@ class PipelineConfig:
     media_files: list[str] = field(default_factory=list)
     lang: str = "ja"
     device: str = "cuda"
-    whisper_model: str = "large-v3"
-    compute_type: str = "int8"          # faster-whisper 量化 (int8/int8_float16/float16)
+    asr: Recognizer = field(default_factory=WhisperRecognizer)
     align_model: str = "mms_fa"
-    condition_on_prev: bool = True
-    vad_filter: bool = False
-    initial_prompt: str | None = None
     tiger_mode: str | None = None       # None | "denoise" | "separate"
     mss_model: str = "tiger-dnr"
     overlap_mode: str = "merge"         # separate 模式重叠: merge=压成一句 / keep=保留双条
     save_intermediate: bool = False
-    keep_whisper_srt: bool = False
+    keep_asr_srt: bool = False
     keep_aligned_srt: bool = False
     generate_review: bool = False
     translate: bool = False
@@ -58,7 +55,7 @@ def run_pipeline(
     log: Callable[[str], None],
     progress: Callable[[float, str], None],
 ) -> None:
-    """TIGER → Whisper → 对齐 → 翻译。"""
+    """TIGER → 识别 → 对齐 → 翻译。"""
     # T17: 溢出目录随任务生灭，取消/异常同走 finally 清除
     spill_dir = tempfile.mkdtemp(prefix="writansub_spill_") if cfg.tiger_mode else None
     try:
@@ -90,13 +87,13 @@ def _run_pipeline_impl(
 
     sub_results: dict[str, Any] = {}
     tiger_results: dict[str, Any] = {}
+    prealigned_media: set[str] = set()
 
     cfg.device = resolve_device(cfg.device, log)
     log(f"[决策] tiger_mode={cfg.tiger_mode} mss={cfg.mss_model} "
         f"align_model={cfg.align_model} has_ref={has_ref} ref_direct={cfg.ref_direct} "
         f"translate={cfg.translate} device={cfg.device}")
-    log(f"[决策] whisper={cfg.whisper_model} lang={cfg.lang} "
-        f"condition_on_prev={cfg.condition_on_prev} vad_filter={cfg.vad_filter}")
+    log(f"[决策] asr={cfg.asr.tag()} {cfg.asr!r} lang={cfg.lang}")
     log(f"[文件] 共 {total} 个: {[os.path.basename(m) for m in cfg.media_files]}")
 
     # Phase: TIGER 增强
@@ -105,18 +102,12 @@ def _run_pipeline_impl(
             cfg, num_phases, log, progress, _cancelled, spill_dir,
         )
 
-    # Phase: Whisper 转录
+    # Phase: 语音识别
     w_phase = 1 + phase_offset
-    log(f">>> Phase {w_phase}/{num_phases}: Whisper 转录")
+    log(f">>> Phase {w_phase}/{num_phases}: 语音识别")
 
-    def _w_factory():
-        from faster_whisper import WhisperModel
-        return WhisperModel(cfg.whisper_model, device=cfg.device, compute_type=cfg.compute_type)
-
-    # 缓存键带 compute_type：同进程切换量化档不得复用旧模型
-    wh = reg.acquire_model(
-        f"whisper:{cfg.whisper_model}:{cfg.compute_type}", cfg.device, _w_factory)
-    whisper_model = reg.get_model(wh)
+    wh = reg.acquire_model(cfg.asr.cache_key(), cfg.device, lambda: cfg.asr.load(cfg.device))
+    asr_model = reg.get_model(wh)
 
     try:
         for idx, media in enumerate(cfg.media_files, 1):
@@ -126,23 +117,25 @@ def _run_pipeline_impl(
             def _w_p(pct, msg, _idx=idx):
                 progress(
                     (phase_offset * total + (_idx - 1) + pct) / (total * num_phases),
-                    f"[Whisper {_idx}/{total}] {msg}",
+                    f"[识别 {_idx}/{total}] {msg}",
                 )
 
-            subs, word_data = _transcribe_single(
-                media, tiger_results.get(media), cfg, whisper_model, _w_p, log,
+            subs, word_data, aligned = _transcribe_single(
+                media, tiger_results.get(media), cfg, asr_model, _w_p, log,
             )
             sub_results[media] = subs
-            log(f"[Whisper {idx}/{total}] 产出 {len(subs)} 条字幕, {sum(len(w) for w in word_data)} 个词")
+            if aligned and subs:
+                prealigned_media.add(media)
+            log(f"[识别 {idx}/{total}] 产出 {len(subs)} 条字幕, {sum(len(w) for w in word_data)} 个词")
 
             base = os.path.splitext(media)[0]
             if cfg.generate_review and cfg.word_conf_threshold > 0:
                 # T06: 只把低置信词记到 Sub 上随流程携带，review 文件在索引稳定后统一生成
                 low_c, tot_w = attach_low_words(subs, word_data, cfg.word_conf_threshold)
                 if tot_w:
-                    log(f"[Whisper {idx}/{total}] 低置信词 {low_c}/{tot_w}")
-            if cfg.keep_whisper_srt:
-                write_srt(subs, stage_path(base, "original", "whisper-" + cfg.whisper_model))
+                    log(f"[识别 {idx}/{total}] 低置信词 {low_c}/{tot_w}")
+            if cfg.keep_asr_srt:
+                write_srt(subs, stage_path(base, "original", cfg.asr.tag()))
     finally:
         reg.release_model(wh)
 
@@ -190,6 +183,7 @@ def _run_pipeline_impl(
                     raise ValueError(f"参考轴仅匹配 {matched}/{len(original)} 条识别字幕")
                 log(f"参考字幕映射完成: {len(mapped)} 条，匹配 {matched}/{len(original)} 条识别字幕")
                 sub_results[media] = mapped
+                prealigned_media.discard(media)
                 if cfg.ref_direct and original:
                     direct_ref_media.add(media)
             except CancelledError:
@@ -227,6 +221,12 @@ def _run_pipeline_impl(
                         sub_results[media], overlap_mode=cfg.overlap_mode, **pp)
                     log(f"[参考] {os.path.basename(media)}: 完整使用参考轴，跳过强制对齐")
                     _a_p(1.0, "参考轴处理完成")
+                    continue
+                if media in prealigned_media:
+                    aligned_results[media] = post_process(
+                        sub_results[media], overlap_mode=cfg.overlap_mode, **pp)
+                    log(f"[识别] {os.path.basename(media)}: 识别器已给出对齐时间轴，跳过强制对齐")
+                    _a_p(1.0, "时间轴处理完成")
                     continue
                 if not sub_results[media]:
                     aligned_results[media] = []
@@ -295,7 +295,7 @@ def _run_pipeline_impl(
             base = os.path.splitext(media)[0]
             write_srt(subs, base + ".srt")
             if cfg.generate_review:
-                thr = 0.0 if media in direct_ref_media else cfg.align_conf_threshold
+                thr = 0.0 if media in direct_ref_media or media in prealigned_media else cfg.align_conf_threshold
                 srt_c, ass_c, n_words, n_lines = generate_review_final(subs, thr)
                 if n_words or n_lines:
                     write_review_files(base, srt_c, ass_c)
@@ -385,14 +385,14 @@ def _transcribe_single(
     media: str,
     tiger_data: dict | None,
     cfg: PipelineConfig,
-    whisper_model: Any,
+    model: Any,
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
-) -> tuple[list, list]:
-    # T17: 溢出 wav 已在盘上，直接喂 whisper，免二次落盘
-    whisper_input = media
+) -> tuple[list, list, bool]:
+    # T17: 溢出 wav 已在盘上，直接喂识别器，免二次落盘
+    asr_input = media
     if tiger_data and "dialog_path" in tiger_data:
-        whisper_input = tiger_data["dialog_path"]
+        asr_input = tiger_data["dialog_path"]
 
     overlap_r = tiger_data.get("overlap_regions") if tiger_data else None
     separated = None
@@ -402,22 +402,15 @@ def _transcribe_single(
         separated = (load_wav(tiger_data["spk1_path"])[0], load_wav(tiger_data["spk2_path"])[0])
 
     if overlap_r and separated:
-        return _whisper_with_overlap(
-            whisper_input, overlap_r, separated,
+        return _transcribe_with_overlap(
+            asr_input, overlap_r, separated,
             tiger_data.get("spk_sr", 16000),
-            cfg, whisper_model, progress_callback, log,
+            cfg, model, progress_callback, log,
         )
 
-    return transcribe(
-        whisper_input, lang=cfg.lang, device=cfg.device,
-        log_callback=log,
-        progress_callback=progress_callback,
-        condition_on_previous_text=cfg.condition_on_prev,
-        model=whisper_model,
-        cancelled=lambda: ResourceRegistry.instance().cancelled,
-        vad_filter=cfg.vad_filter,
-        initial_prompt=cfg.initial_prompt,
-    )
+    transcript = cfg.asr.transcribe(model, asr_input, cfg.lang, progress_callback)
+    subs, word_data = to_subs(transcript)
+    return subs, word_data, is_aligned(transcript)
 
 
 def _overlap_windows(full_subs: list, regions: list) -> list[tuple[float, float, set[int]]]:
@@ -448,35 +441,25 @@ def _overlap_windows(full_subs: list, regions: list) -> list[tuple[float, float,
     return windows
 
 
-def _whisper_with_overlap(
+def _transcribe_with_overlap(
     media: str,
     overlap_regions: list,
     separated_tracks: tuple,
     spk_sr: int,
     cfg: PipelineConfig,
-    whisper_model: Any,
+    model: Any,
     progress_callback: Callable[[float, str], None],
     log: Callable[[str], None],
-) -> tuple[list, list]:
+) -> tuple[list, list, bool]:
     from writansub.preprocess.core import save_wav
 
     reg = ResourceRegistry.instance()
 
-    def _cancelled() -> bool:
-        return reg.cancelled
-
-    full_subs, full_word_data = transcribe(
-        media, lang=cfg.lang, device=cfg.device,
-        log_callback=log,
-        progress_callback=progress_callback,
-        condition_on_previous_text=cfg.condition_on_prev,
-        model=whisper_model,
-        cancelled=_cancelled,
-        vad_filter=cfg.vad_filter,
-        initial_prompt=cfg.initial_prompt,
-    )
+    full = cfg.asr.transcribe(model, media, cfg.lang, progress_callback)
+    full_subs, full_word_data = to_subs(full)
+    aligned = is_aligned(full)
     if not overlap_regions:
-        return full_subs, full_word_data
+        return full_subs, full_word_data, aligned
 
     # (Sub, word_data) 成对携带过丢弃/排序/重编号——separate 模式的词级 review 由此存活
     overlap_pairs: list[tuple] = []
@@ -505,11 +488,9 @@ def _whisper_with_overlap(
             try:
                 save_wav(chunk, tmp_path, spk_sr)
                 # 区域片段极短，故意不开 VAD：误判会把整段吞掉
-                local_subs, local_words = transcribe(
-                    tmp_path, lang=cfg.lang, device=cfg.device,
-                    condition_on_previous_text=False, model=whisper_model,
-                    initial_prompt=cfg.initial_prompt,
-                )
+                local = cfg.asr.transcribe(model, tmp_path, cfg.lang, short_clip=True)
+                aligned = aligned and is_aligned(local)
+                local_subs, local_words = to_subs(local)
                 reg.checkpoint()
                 for s, words in zip(local_subs, local_words):
                     if s.text.strip() and s.end > s.start:
@@ -538,4 +519,4 @@ def _whisper_with_overlap(
             for i, (s, _) in enumerate(pairs, 1)]
     word_data = [p[1] for p in pairs]
 
-    return subs, word_data
+    return subs, word_data, aligned

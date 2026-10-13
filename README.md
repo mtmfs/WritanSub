@@ -18,7 +18,8 @@ AI 字幕处理流水线：音频预处理 → 语音识别 → 强制打轴 →
 8. [CLI 命令行参考](#cli-命令行参考)
 9. [常见问题与排错](#常见问题与排错)
 10. [开发](#开发)
-11. [许可证](#许可证)
+11. [项目结构](#项目结构)
+12. [许可证](#许可证)
 
 ---
 
@@ -116,7 +117,7 @@ pip install uv
 cd WritanSub
 
 # 3. 创建环境并安装所有依赖（包括正确的 CUDA 版 PyTorch）
-#    已默认使用清华大学 PyPI 镜像，国内下载更快
+#    依赖从官方 PyPI 下载，国内网络慢时请先开启系统代理
 uv sync
 ```
 
@@ -317,11 +318,13 @@ uv run writansub-cli --help
 |------|------|------|---------|
 | `Systran/faster-whisper-large-v3` | 语音识别 | ~1.5 GB | `~/.cache/huggingface/hub/` |
 | `MMS_FA` (torchaudio 内置) | 强制打轴 | ~1.2 GB | `~/.cache/torch/hub/` |
-| `TIGER-DnR` | 降噪 | ~1 GB | `~/.cache/huggingface/hub/` |
-| `TIGER-Speech` | 说话人分轨 | ~1 GB | `~/.cache/huggingface/hub/` |
+| `TIGER-DnR` | 降噪 | ~1 GB | 项目文件夹下的 `cache/` |
+| `TIGER-Speech` | 说话人分轨 | ~1 GB | 项目文件夹下的 `cache/` |
 | `Qwen3-ForcedAligner` | 强制打轴（可选） | ~1.2 GB | `~/.cache/huggingface/hub/` |
 
 > `~` 表示你的用户主目录，Windows 上通常是 `C:\Users\你的用户名`。
+>
+> TIGER 的两个模型不在用户主目录，而是下载到 WritanSub 项目文件夹里的 `cache/` 子文件夹。
 
 ### 下载方式
 
@@ -357,6 +360,7 @@ python -m writansub
 1. 在能联网的机器上运行一次程序，让模型自动下载
 2. 把整个 `C:\Users\用户名\.cache\huggingface\hub\` 文件夹复制到目标机器的对应位置
 3. 同样复制 `~/.cache/torch/hub/`（MMS_FA 模型）
+4. 如果用到降噪或说话人分轨，再把 WritanSub 项目文件夹里的 `cache/` 复制到目标机器项目文件夹的同一位置（TIGER 模型）
 
 ---
 
@@ -400,6 +404,12 @@ writansub-cli pipeline video.mp4 --ref-srt reference.srt
 
 # 直接使用参考轴，跳过强制对齐
 writansub-cli pipeline video.mp4 --ref-srt reference.srt --ref-direct
+
+# 参考视频内嵌字幕的时间轴（按识别语言自动选轨）
+writansub-cli pipeline video.mkv --ref-embedded
+
+# 手动指定内嵌字幕轨
+writansub-cli pipeline video.mkv --ref-sub-track 0
 ```
 
 **pipeline 常用参数：**
@@ -409,15 +419,20 @@ writansub-cli pipeline video.mp4 --ref-srt reference.srt --ref-direct
 | `--lang` | 识别语言 | `ja` |
 | `--device` | 推理设备 (`cuda`/`cpu`) | `cuda` |
 | `--whisper-model` | Whisper 模型 | `large-v3` |
+| `--compute-type` | Whisper 量化档 (`int8`/`int8_float16`/`float16`)；CUDA 上 `float16` 更快更准但更吃显存 | `int8` |
 | `--align-model` | 对齐模型 (`mms_fa`/`qwen3-fa-0.6b`) | `mms_fa` |
 | `--vad` | 启用 VAD 跳过静音 | 不启用 |
 | `--no-cond-prev` | 禁用前文调优 | 启用 |
 | `--initial-prompt` | 初始提示词 | 无 |
 | `--denoise` | 启用 DnR 降噪 | 不启用 |
 | `--separate` | 启用说话人分离（含降噪） | 不启用 |
+| `--mss-model` | 降噪模型 (`tiger-dnr`/`htdemucs_ft`/`htdemucs`) | `tiger-dnr` |
 | `--save-intermediate` | 保存中间音轨 | 不保存 |
+| `--overlap-mode` | `--separate` 时两人同时说话的处理：`merge` 压成一句（`- 甲` / `- 乙`），`keep` 保留两条重叠字幕 | `merge` |
 | `--ref-srt` | 外部参考 SRT | 无 |
-| `--ref-direct` | 直接使用参考轴 | 不启用 |
+| `--ref-embedded` | 参考视频内嵌字幕，按识别语言自动选轨 | 不启用 |
+| `--ref-sub-track` | 手动指定内嵌字幕轨索引（覆盖自动选轨） | 无 |
+| `--ref-direct` | 直接使用参考轴；参考字幕不可用或没对上时自动回退强制对齐 | 不启用 |
 | `--review` | 生成 Review 标记文件 | 不生成 |
 | `--translate` | 启用 AI 翻译（终稿另存 `<base>_<语言>.srt`，源语终稿不受影响） | 不启用 |
 | `--no-bilingual` | 翻译终稿输出单语译文 | 默认双语 |
@@ -533,7 +548,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 **原因**：国内访问 PyPI 或 Hugging Face 较慢。
 
 **解决**：
-1. 项目已默认配置清华大学 PyPI 镜像（`pyproject.toml`），`uv sync` 会自动走国内源，无需手动设置。
+1. 依赖默认从官方 PyPI 下载（清华镜像对部分包持续返回 403，已不再作为默认源）。下载慢或卡住时，请开启系统代理后重新执行 `uv sync`。
 2. Hugging Face 模型下载由程序自动处理镜像，安装阶段不需要担心
 
 ---
@@ -618,8 +633,8 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 **解决**：
 1. GUI 里直接点「暂停」按钮，再次点击恢复
-2. GUI 里点「取消任务」，或 CLI 里按 `Ctrl + C`，程序会在当前段落处理完后安全退出
-3. 已经生成的输出文件会保留，不会丢失
+2. GUI 里点「取消任务」，或 CLI 里按 `Ctrl + C`：降噪和对齐阶段会立即停下，语音识别阶段会在当前片段识别完后停下。CLI 里再按一次 `Ctrl + C` 强制退出
+3. 已经写到磁盘的文件都会保留。注意流水线是按阶段处理整批文件的：在识别或对齐阶段取消，这一批都还没有终稿（`video.srt`）；在翻译阶段取消，源语终稿已经写好，不会丢
 
 #### Q11：输出文件在哪里？
 
@@ -651,9 +666,16 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 主要技术栈：
 
 - Python 3.12 + PySide6（GUI）
-- faster-whisper（语音识别）
+- faster-whisper（语音识别；另有实验性的 Qwen3-ASR 后端，尚未接入 CLI）
 - torchaudio + MMS_FA / Qwen3（强制对齐）
 - TIGER / Demucs（音频预处理）
+- silero-vad（说话人分轨时的重叠检测）
+
+运行测试（`uv sync` 已包含 pytest）：
+
+```bash
+uv run pytest
+```
 
 ---
 
@@ -662,20 +684,28 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 ```
 WritanSub/
 ├── writansub/
+│   ├── cli.py                # 命令行入口（writansub-cli）
 │   ├── types.py              # 公共数据类型、常量
 │   ├── paths.py              # 统一路径管理
 │   ├── config.py             # 配置读写
 │   ├── bridge.py             # 进程与模型资源管理（子进程/取消/暂停）
-│   ├── preprocess/           # TIGER 音频预处理
-│   ├── transcribe/           # Whisper 语音识别
-│   ├── align/                # MMS_FA / Qwen3 强制打轴
+│   ├── logger.py             # 会话日志
+│   ├── network.py            # Hugging Face 镜像自动切换
+│   ├── preprocess/           # TIGER / Demucs 音频预处理
+│   ├── transcribe/           # 语音识别（统一识别器接口 + Whisper / Qwen3-ASR 适配器）
+│   ├── align/                # MMS_FA / Qwen3 强制打轴与后处理
 │   ├── translate/            # AI 翻译
-│   ├── subtitle/             # 字幕处理（SRT 读写、置信度审查）
+│   ├── subtitle/             # 字幕处理（SRT 读写、内嵌字幕提取、参考轴映射、置信度审查）
 │   ├── pipeline/             # 流水线编排
 │   ├── gui/                  # PySide6 界面
 │   └── vendor/tiger/         # 第三方 TIGER 模型代码
+├── tests/                    # pytest 测试
+├── build/                    # 打包脚本、安装器、启动器
+├── docs/                     # 设计与迁移存档
+├── archive/                  # 已退役代码归档
 ├── pyproject.toml
-├── requirements.txt
+├── uv.lock                   # 依赖锁（安装以它为准）
+├── requirements.txt          # 仅供参考，不用于安装
 ├── WritanSub.bat             # Windows GUI 启动脚本
 ├── WritanSubCLI.bat          # Windows CLI 启动脚本
 ├── LICENSE                   # GPL-3.0 许可证全文

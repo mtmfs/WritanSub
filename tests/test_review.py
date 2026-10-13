@@ -1,5 +1,5 @@
 """review：attach_low_words 携带 + generate_review_final 单点生成（T06）。"""
-from writansub.subtitle.review import attach_low_words, generate_review_final
+from writansub.subtitle.review import attach_low_words, generate_review, generate_review_final
 from writansub.types import Sub, WordInfo
 
 
@@ -29,6 +29,22 @@ def test_attach_empty_word_data_noop():
     low, total = attach_low_words(subs, [[]], 0.5)
     assert (low, total) == (0, 0)
     assert subs[0].low_words == []
+
+
+def test_attach_ignores_words_without_probability():
+    subs = [_sub(1, "ab")]
+    words = [[WordInfo("a", None), WordInfo("b", 0.1)]]
+    low, total = attach_low_words(subs, words, 0.5)
+    assert (low, total) == (1, 1)
+    assert subs[0].low_words == ["b"]
+
+
+def test_generate_review_emits_unscored_word_unmarked():
+    subs = [_sub(1, "ab")]
+    words = [[WordInfo("a", None), WordInfo("b", 0.1)]]
+    srt, _, low, total = generate_review(subs, words, 0.5)
+    assert (low, total) == (1, 1)
+    assert "a【?b】" in srt
 
 
 def test_final_marks_word_srt_and_ass():

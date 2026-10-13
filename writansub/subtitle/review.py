@@ -36,6 +36,10 @@ def generate_review(
             srt_parts: list[str] = []
             ass_parts: list[str] = []
             for w in words:
+                if w.probability is None:
+                    srt_parts.append(w.word)
+                    ass_parts.append(w.word)
+                    continue
                 total_words += 1
                 if w.probability < threshold:
                     stripped = w.word.lstrip()
@@ -86,6 +90,8 @@ def attach_low_words(
             continue
         picked: list[str] = []
         for w in words:
+            if w.probability is None:
+                continue
             total += 1
             if w.probability < threshold:
                 low += 1

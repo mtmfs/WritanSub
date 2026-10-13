@@ -60,6 +60,9 @@ packages = ["writansub"]
 [dependency-groups]
 dev = ["pytest", "pyflakes"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
 torchaudio = { index = "pytorch-cu128" }

@@ -47,12 +47,13 @@ def pipeline_case(monkeypatch, registry, tmp_path):
 
     def run(sources, references, **options):
         """sources={文件名:字幕}, references={文件名:参考字幕/异常/None(无轨)}。"""
+        prealigned = options.pop("prealigned", False)
         state.media = {name: str(tmp_path / f"{name}.mkv") for name in sources}
 
         def transcribe(media, tiger_data, cfg, model, progress, log):
             progress(1, "识别完成")
             subs = copy.deepcopy(sources[Path(media).stem])
-            return subs, [[] for _ in subs]
+            return subs, [[] for _ in subs], prealigned
 
         def probe(media):
             ref = references[Path(media).stem]
@@ -181,3 +182,25 @@ def test_alignment_failure_releases_model_and_leaves_existing_output(pipeline_ca
         pipeline_case.run({"bad": [Sub(1, 1, 2, "原文")]}, {"bad": None})
     assert "mms_fa" in pipeline_case.released
     assert output.read_text(encoding="utf-8") == "existing result"
+
+
+@pytest.mark.parametrize("align_model", ["mms_fa", "qwen3-fa-0.6b"])
+def test_prealigned_transcript_skips_aligner(pipeline_case, align_model):
+    result = pipeline_case.run(
+        {"good": [Sub(1, 1, 2, "甲"), Sub(2, 3, 4, "乙")]}, {"good": None},
+        align_model=align_model, prealigned=True,
+    )
+    assert len(result.models) == 1 and result.models[0].startswith("whisper:")
+    assert not result.aligned
+    assert [s.text for s in result.outputs["good"]] == ["甲", "乙"]
+    assert result.reviews[0][1] == 0
+    assert any("识别器已给出对齐时间轴" in msg for msg in result.logs)
+
+
+def test_prealigned_media_realigns_after_reference_mapping(pipeline_case):
+    result = pipeline_case.run(
+        {"good": [Sub(1, 1, 2, "甲")]}, {"good": [Sub(1, 0, 5, "甲")]},
+        ref_direct=False, prealigned=True,
+    )
+    assert result.aligned
+    assert not any("识别器已给出对齐时间轴" in msg for msg in result.logs)

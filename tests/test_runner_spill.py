@@ -8,44 +8,32 @@ import writansub.pipeline.runner as runner
 from writansub.bridge import CancelledError
 from writansub.pipeline.runner import PipelineConfig, _transcribe_single, run_pipeline
 from writansub.preprocess.core import TimeSpan, save_wav
-from writansub.types import Sub, WordInfo
+from asr_fakes import FakeRecognizer, transcript
 
 
-class _RecordingTranscribe:
-    """记录每次调用的输入路径；首次(全轨)返回预置结果，后续(区域)返回短句。"""
-
-    def __init__(self):
-        self.calls: list[str] = []
-
-    def __call__(self, file_path, **kwargs):
-        self.calls.append(file_path)
-        if len(self.calls) == 1:
-            return (
-                [Sub(index=1, start=0.0, end=3.0, text="全轨")],
-                [[WordInfo("全轨", 0.9)]],
-            )
-        n = len(self.calls)
-        return [Sub(index=1, start=0.0, end=1.0, text=f"区域{n}")], [[WordInfo("区", 0.2)]]
+def _fake():
+    return FakeRecognizer(
+        full=transcript((0.0, 3.0, "全轨")),
+        replies=[transcript((0.0, 1.0, "区域2", 0.2)), transcript((0.0, 1.0, "区域3", 0.2))],
+    )
 
 
-def test_transcribe_single_feeds_spill_path_directly(monkeypatch, registry, tmp_path):
-    fake = _RecordingTranscribe()
-    monkeypatch.setattr(runner, "transcribe", fake)
+def test_transcribe_single_feeds_spill_path_directly(registry, tmp_path):
+    fake = _fake()
     dialog_path = str(tmp_path / "abc_dialog.wav")
     save_wav(torch.zeros(1, 4410), dialog_path, 44100)
 
-    cfg = PipelineConfig(device="cpu")
+    cfg = PipelineConfig(device="cpu", asr=fake)
     _transcribe_single(
         "video.mkv", {"dialog_path": dialog_path, "dialog_sr": 44100},
         cfg, object(), lambda p, m: None, lambda m: None,
     )
 
-    assert fake.calls == [dialog_path]  # 直接喂溢出 wav，无二次临时拷贝
+    assert [c["path"] for c in fake.calls] == [dialog_path]  # 直接喂溢出 wav，无二次临时拷贝
 
 
-def test_transcribe_single_loads_spk_paths_for_overlap(monkeypatch, registry, tmp_path):
-    fake = _RecordingTranscribe()
-    monkeypatch.setattr(runner, "transcribe", fake)
+def test_transcribe_single_loads_spk_paths_for_overlap(registry, tmp_path):
+    fake = _fake()
 
     dialog_path = str(tmp_path / "abc_dialog.wav")
     save_wav(torch.zeros(1, 4410), dialog_path, 44100)
@@ -59,14 +47,15 @@ def test_transcribe_single_loads_spk_paths_for_overlap(monkeypatch, registry, tm
         "spk1_path": spk1_path, "spk2_path": spk2_path, "spk_sr": 16000,
         "overlap_regions": [TimeSpan(start=1.0, end=3.0)],
     }
-    cfg = PipelineConfig(device="cpu")
-    subs, word_data = _transcribe_single(
+    cfg = PipelineConfig(device="cpu", asr=fake)
+    subs, word_data, aligned = _transcribe_single(
         "video.mkv", tiger_data, cfg, object(), lambda p, m: None, lambda m: None,
     )
 
-    assert fake.calls[0] == dialog_path  # 全轨走溢出 wav
+    assert fake.calls[0]["path"] == dialog_path and fake.calls[0]["short_clip"] is False  # 全轨走溢出 wav
     assert {s.speaker for s in subs if s.text.startswith("区域")} == {1, 2}
     assert len(subs) == len(word_data)
+    assert aligned is False
 
 
 def test_run_pipeline_cleans_spill_dir_on_cancel(monkeypatch):

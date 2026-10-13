@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 
 MEDIA_FILETYPES = [
     ("媒体文件", "*.mp4 *.mkv *.avi *.mov *.mp3 *.wav *.flac *.aac *.ogg *.m4a"),
@@ -59,7 +59,26 @@ TRANSLATE_TARGETS = [
 
 class WordInfo(NamedTuple):
     word: str
-    probability: float
+    probability: float | None
+    start: float | None = None
+    end: float | None = None
+
+
+@dataclass
+class Segment:
+    start: float
+    end: float
+    text: str
+    time_kind: Literal["estimate", "window", "aligned"] = "estimate"
+    speaker: str | None = None
+    words: list[WordInfo] = field(default_factory=list)
+
+
+@dataclass
+class Transcript:
+    segments: list[Segment]
+    duration: float
+    backend: str
 
 
 @dataclass
