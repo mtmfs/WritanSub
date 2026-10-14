@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar
 
+from writansub.transcribe.base import model_tag
 from writansub.types import Segment, Transcript, WordInfo
 
 
@@ -19,7 +20,7 @@ class WhisperRecognizer:
     name: ClassVar[str] = "whisper"
 
     def tag(self) -> str:
-        return f"whisper-{self.options.model}"
+        return f"whisper-{model_tag(self.options.model)}"
 
     def cache_key(self) -> str:
         return f"whisper:{self.options.model}:{self.options.compute_type}"

@@ -17,6 +17,31 @@ _lock = threading.Lock()
 _t0: float | None = None
 _fault_fh = None
 _root_handler: logging.Handler | None = None
+_SECRET_FLAG = "--api-key"
+_SECRET_FLAG_MIN_ABBREV = "--api-k"  # argparse 允许前缀缩写：--api-b* 已是 --api-base，--api-k 起才唯一指向 --api-key
+
+
+def _is_secret_flag(token: str) -> bool:
+    """token 的旗标部分（去掉 =value）是否为 --api-key 或 argparse 会接受的前缀缩写。"""
+    name = token.partition("=")[0]
+    return name.startswith(_SECRET_FLAG_MIN_ABBREV) and _SECRET_FLAG.startswith(name)
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    """T44：返回 argv 副本，--api-key 的值换成 ***。覆盖 `--api-key V`、`--api-key=V`、`--api-k V`、`--api-ke=V`。"""
+    out: list[str] = []
+    hide_next = False
+    for tok in argv:
+        if hide_next:
+            out.append("***")
+            hide_next = False
+        elif _is_secret_flag(tok):
+            name, eq, _ = tok.partition("=")
+            out.append(f"{name}=***" if eq else tok)
+            hide_next = not eq
+        else:
+            out.append(tok)
+    return out
 
 
 def _collect_basic_info() -> list[str]:
@@ -131,7 +156,7 @@ def init_session_log() -> str:
                 f.write(f"Session start: {datetime.now().isoformat(timespec='seconds')}\n")
                 for line in _collect_basic_info():
                     f.write(line + "\n")
-                f.write(f"argv: {sys.argv}\n")
+                f.write(f"argv: {redact_argv(sys.argv)}\n")
                 f.write("=" * 60 + "\n\n")
         except OSError as e:
             sys.stderr.write(f"[writansub-logger] init failed at {LOG_DIR!r}: {e!r}\n")

@@ -1,6 +1,18 @@
+import re
 from typing import Any, Callable, Protocol
 
+from writansub.subtitle.srt_io import safe_name
 from writansub.types import Sub, Transcript, WordInfo
+
+
+def model_tag(spec: str) -> str:
+    """模型标识 → 产物文件名片段（T49）：裸名 / HF repo id / 本地路径一律只取末段再安全化。
+
+    `/` 与 `\\` 在任何平台都当分隔符（不用 os.path.basename：POSIX 上它不切反斜杠，测试会跨平台漂移）；
+    忽略空段与 `.`/`..`；取不到末段时退化为 "local"。只管命名，加载模型与缓存键仍用原始 spec。
+    """
+    parts = [p for p in re.split(r"[\\/]+", spec.strip()) if p not in ("", ".", "..")]
+    return (safe_name(parts[-1]) if parts else "") or "local"
 
 
 class Recognizer(Protocol):

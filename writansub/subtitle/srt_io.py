@@ -14,12 +14,22 @@ _LANG_CODES = {
 }
 
 
+_UNSAFE_NAME = re.compile(r'[\\/:*?"<>|\s]+')
+
+
+def safe_name(s: str) -> str:
+    """文件名片段安全化：路径分隔符、盘符冒号、Windows 非法字符与空白压成单个连字符，去首尾连字符。
+    可能返回空串，兜底由调用方决定。"""
+    return _UNSAFE_NAME.sub("-", s.strip()).strip("-")
+
+
 def stage_path(base: str, stage: str, model: str) -> str:
     """中间/单步产物统一命名：<base>_<stage>_<model>.srt（如 _original_whisper-large-v3）。
 
     终稿不走此规则：源语终稿恒为 <base>.srt，翻译终稿为 <base>_<lang_code>.srt。
+    model 段经 safe_name 兜底（T49）；base 是调用方给的输出前缀，可含盘符与斜杠，不动。
     """
-    return f"{base}_{stage}_{model}.srt"
+    return f"{base}_{stage}_{safe_name(model) or 'model'}.srt"
 
 
 def lang_code(target_lang: str) -> str:
@@ -28,8 +38,7 @@ def lang_code(target_lang: str) -> str:
     code = _LANG_CODES.get(target_lang.strip())
     if code:
         return code
-    safe = re.sub(r'[\\/:*?"<>|\s]+', "-", target_lang.strip()).strip("-")
-    return safe or "translated"
+    return safe_name(target_lang) or "translated"
 
 
 def _subs_from_pysrt(items: Any, lang: str | None) -> list[Sub]:

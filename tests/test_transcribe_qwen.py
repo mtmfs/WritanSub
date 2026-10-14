@@ -155,3 +155,9 @@ def test_qwen_name_tag_cache_key():
     assert rec.tag() == "qwen3-asr-1.7b"
     assert rec.cache_key() == "qwen3:Qwen/Qwen3-ASR-1.7B:Qwen/Qwen3-ForcedAligner-0.6B"
     assert QwenRecognizer(QwenOptions(model="Qwen/Qwen3-ASR-0.6B")).tag() == "qwen3-asr-0.6b"
+
+
+def test_qwen_tag_from_local_path():
+    assert QwenRecognizer(QwenOptions(model="G:\\models\\Qwen3-ASR-1.7B\\")).tag() == "qwen3-asr-1.7b"
+    assert QwenRecognizer(QwenOptions(model="/srv/Qwen3-ASR-0.6B")).tag() == "qwen3-asr-0.6b"
+    assert QwenRecognizer(QwenOptions(model=".")).tag() == "local"

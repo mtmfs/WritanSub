@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar
 
 from writansub.align.core import LANG_MAP
+from writansub.transcribe.base import model_tag
 from writansub.transcribe.segment import attach_punctuation, split_tokens
 from writansub.types import Segment, Transcript
 
@@ -27,7 +28,7 @@ class QwenRecognizer:
     name: ClassVar[str] = "qwen3"
 
     def tag(self) -> str:
-        return self.options.model.rsplit("/", 1)[-1].lower()
+        return model_tag(self.options.model).lower()
 
     def cache_key(self) -> str:
         return f"qwen3:{self.options.model}:{self.options.aligner}"

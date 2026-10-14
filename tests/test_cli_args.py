@@ -1,4 +1,6 @@
 """CLI 参数：批次 2/3 新增旗标的默认值与解析（T04/T10/T28）。"""
+import pytest
+
 from writansub.cli import build_parser
 
 
@@ -67,3 +69,11 @@ def test_ss_model_flag_removed():
 def test_pipeline_config_has_no_ss_model():
     from writansub.pipeline.runner import PipelineConfig
     assert not hasattr(PipelineConfig(), "ss_model")
+
+
+def test_api_key_abbreviation_matches_logger_assumption():
+    """T44：logger.redact_argv 假定 --api-k 起是 --api-key 的唯一前缀；将来新增 --api-k* 旗标此处先报警。"""
+    a = build_parser().parse_args(["translate", "x.srt", "--api-k", "sk-1"])
+    assert a.api_key == "sk-1"
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["translate", "x.srt", "--api-", "sk-1"])

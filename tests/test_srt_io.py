@@ -100,3 +100,16 @@ def test_lang_code_fallback_sanitized():
     assert lang_code("Pirate Speak") == "Pirate-Speak"  # 空白转连字符
     assert lang_code('a/b\\c:d*e?f"g<h>i|j') == "a-b-c-d-e-f-g-h-i-j"
     assert lang_code("   ") == "translated"             # 全空回退兜底
+
+
+# ---- T49 文件名安全化 ----
+
+def test_safe_name_and_stage_path_guard():
+    from writansub.subtitle.srt_io import safe_name, stage_path
+    assert safe_name("whisper-large-v3") == "whisper-large-v3"
+    assert safe_name("  a b/c\\d:e  ") == "a-b-c-d-e"
+    assert safe_name("///") == "" and safe_name("") == ""
+    # model 段兜底安全化，base 段（含盘符、斜杠、空格）原样
+    assert stage_path("D:/v/ep01", "original", r"whisper-G:\m\x") == "D:/v/ep01_original_whisper-G-m-x.srt"
+    assert stage_path("D:\\v\\ep 01", "aligned", "mms_fa") == "D:\\v\\ep 01_aligned_mms_fa.srt"
+    assert stage_path("ep01", "original", "") == "ep01_original_model.srt"

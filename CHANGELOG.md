@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 - **对齐后字幕乱序**：逐句对齐可能改变相邻字幕的先后顺序，后处理此前只在 separate 模式排序，普通字幕会被压成 10 毫秒。现在所有字幕先按开始时间排序再贴合时间轴，并统一重编号。
 - 短字幕向前合并时保留两句中较低的对齐分数，对齐失败的短句不再被高分前句吞掉而漏出 review。
 - `writansub-cli --version` 显示 0.1.9：0.1.10 发版时漏改 `writansub/__init__.py`，已补齐。
+- **`--api-key` 明文进会话日志**：日志开头记录的命令行原样写入密钥值，分享排错日志会带出；现把 `--api-key V` / `--api-key=V`（含 `--api-k` 等前缀缩写）的值改写为 `***`。
+- **模型路径拼进产物文件名**：`--whisper-model` 传本地目录（如 `G:\models\x`）或 `owner/model` 仓库名时，盘符与分隔符被原样拼进 `_original_whisper-<模型>.srt`，识别跑完才报写文件失败。现文件名只取模型标识最后一段并做安全化（`Systran/faster-whisper-large-v3` → `whisper-faster-whisper-large-v3`），加载与模型缓存键仍用原路径；`stage_path` 对模型段统一兜底，Qwen3 后端同样处理。
 
 ## [0.1.10] - 2026-07-16 批次 8（内存批）
 

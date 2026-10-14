@@ -88,3 +88,30 @@ def test_name_tag_cache_key():
     assert rec.tag() == "whisper-medium"
     assert rec.cache_key() == "whisper:medium:float16"
     assert WhisperRecognizer().cache_key() == "whisper:large-v3:int8"
+
+
+def test_model_tag():
+    from writansub.transcribe.base import model_tag
+    assert model_tag("large-v3") == "large-v3"
+    assert model_tag("Qwen/Qwen3-ASR-1.7B") == "Qwen3-ASR-1.7B"
+    assert model_tag("G:\\models\\whisper-medium-ct2\\") == "whisper-medium-ct2"  # 尾部分隔符
+    assert model_tag("/srv/models/x/") == "x"
+    assert model_tag("./x") == "x" and model_tag("../x/.") == "x"
+    assert model_tag("\\\\nas\\share\\m") == "m"  # UNC
+    assert model_tag("/srv/my model") == "my-model"
+    assert model_tag(".") == "local" and model_tag("..") == "local" and model_tag("/") == "local"
+
+
+@pytest.mark.parametrize("model, tag", [
+    ("large-v3", "whisper-large-v3"),
+    ("Systran/faster-whisper-medium", "whisper-faster-whisper-medium"),
+    ("G:\\models\\whisper-medium-ct2", "whisper-whisper-medium-ct2"),
+    ("G:\\models\\whisper-medium-ct2\\", "whisper-whisper-medium-ct2"),
+    ("/srv/models/my model", "whisper-my-model"),
+    (".", "whisper-local"),
+])
+def test_tag_has_no_path_separators(model, tag):
+    """T49：tag 只取模型末段且文件名安全；cache_key 保留原始规格，加载不受影响。"""
+    rec = WhisperRecognizer(WhisperOptions(model=model))
+    assert rec.tag() == tag
+    assert rec.cache_key() == f"whisper:{model}:int8"
