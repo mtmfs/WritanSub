@@ -1,7 +1,8 @@
-"""Session logger: persists run events + tracebacks to a file under LOG_DIR."""
+"""Session logger: persists run events + tracebacks to a file under paths.LOG_DIR (<WRITANSUB_HOME>/logs)."""
 import faulthandler
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -9,9 +10,10 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from writansub.paths import LOG_DIR
+from writansub import paths
 
-_MAX_LOG_FILES = 20
+_MAX_LOG_FILES = 50  # 每个角色各保留最近 50 份
+_ROLE_RE = re.compile(r"[a-z][a-z0-9-]*")  # 不含下划线：文件名首个 _ 即角色结束，按角色 glob 不会串
 _session_log_path: str | None = None
 _lock = threading.Lock()
 _t0: float | None = None
@@ -44,7 +46,7 @@ def redact_argv(argv: list[str]) -> list[str]:
     return out
 
 
-def _collect_basic_info() -> list[str]:
+def _collect_basic_info(role: str) -> list[str]:
     import platform
     lines = []
     try:
@@ -55,7 +57,9 @@ def _collect_basic_info() -> list[str]:
     lines.append(f"Python {sys.version.split()[0]}")
     lines.append(f"Platform {platform.platform()}")
     lines.append(f"PID {os.getpid()}")
-    lines.append(f"LOG_DIR {LOG_DIR}")
+    lines.append(f"Role {role}")
+    lines.append(f"WRITANSUB_HOME {paths.HOME_DIR}")
+    lines.append(f"LOG_DIR {paths.LOG_DIR}")
     lines.append(f"HF_ENDPOINT={os.environ.get('HF_ENDPOINT', '(default)')}")
     lines.append(f"HF_HUB_OFFLINE={os.environ.get('HF_HUB_OFFLINE', '(unset)')}")
     return lines
@@ -88,6 +92,11 @@ def _elapsed_str() -> str:
         return "+00:00"
     secs = int(time.monotonic() - _t0)
     return f"+{secs // 60:02d}:{secs % 60:02d}"
+
+
+def _log_file_name(role: str, pid: int, now: datetime) -> str:
+    """<角色>_<时间>_<PID>.log：多进程同秒启动不再互相截断（T30 实施备注）。"""
+    return f"{role}_{now:%Y%m%d_%H%M%S}_{pid}.log"
 
 
 def _install_hooks() -> None:
@@ -141,37 +150,42 @@ def _install_hooks() -> None:
         sys.stderr.write(f"[writansub-logger] root logging handler setup failed: {e!r}\n")
 
 
-def init_session_log() -> str:
-    """Create a new per-session log file, write system info header, prune old files."""
+def init_session_log(role: str = "cli") -> str:
+    """Create a new per-session log file <role>_<ts>_<pid>.log, write system info header, prune old files of this role.
+
+    role 标识进程角色（cli / 将来的 daemon、worker），只允许 [a-z][a-z0-9-]*。进程内单例：二次调用原样返回首个路径。
+    """
     global _session_log_path, _t0
+    if not _ROLE_RE.fullmatch(role):
+        raise ValueError(f"log role must match [a-z][a-z0-9-]*, got {role!r}")
     with _lock:
         if _session_log_path:
             return _session_log_path
         try:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(LOG_DIR, f"writansub_{ts}.log")
+            os.makedirs(paths.LOG_DIR, exist_ok=True)
+            path = os.path.join(paths.LOG_DIR, _log_file_name(role, os.getpid(), datetime.now()))
             with open(path, "w", encoding="utf-8") as f:
                 f.write("=" * 60 + "\n")
                 f.write(f"Session start: {datetime.now().isoformat(timespec='seconds')}\n")
-                for line in _collect_basic_info():
+                for line in _collect_basic_info(role):
                     f.write(line + "\n")
                 f.write(f"argv: {redact_argv(sys.argv)}\n")
                 f.write("=" * 60 + "\n\n")
         except OSError as e:
-            sys.stderr.write(f"[writansub-logger] init failed at {LOG_DIR!r}: {e!r}\n")
+            sys.stderr.write(f"[writansub-logger] init failed at {paths.LOG_DIR!r}: {e!r}\n")
             return ""
         _session_log_path = path
         _t0 = time.monotonic()
     _install_hooks()
-    _prune_old_logs()
+    _prune_old_logs(role)
     return path
 
 
-def _prune_old_logs() -> None:
+def _prune_old_logs(role: str) -> None:
+    """同角色日志按 mtime 只留最新 _MAX_LOG_FILES 份；其他角色与旧版 writansub_*.log 不动。"""
     try:
         files = sorted(
-            Path(LOG_DIR).glob("writansub_*.log"),
+            Path(paths.LOG_DIR).glob(f"{role}_*.log"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )

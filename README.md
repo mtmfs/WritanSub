@@ -14,11 +14,12 @@ AI 字幕处理流水线：音频预处理 → 语音识别 → 强制打轴 →
 4. [快速开始](#快速开始)
 5. [CLI 命令行参考](#cli-命令行参考)
 6. [输出文件说明](#输出文件说明)
-7. [模型下载](#模型下载)
-8. [常见问题与排错](#常见问题与排错)
-9. [开发](#开发)
-10. [项目结构](#项目结构)
-11. [许可证](#许可证)
+7. [存储布局](#存储布局)
+8. [模型下载](#模型下载)
+9. [常见问题与排错](#常见问题与排错)
+10. [开发](#开发)
+11. [项目结构](#项目结构)
+12. [许可证](#许可证)
 
 ---
 
@@ -370,6 +371,32 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 ---
 
+## 存储布局
+
+程序自己产生的文件都放在一个**存储根目录**下，默认就是项目文件夹。设置环境变量 `WRITANSUB_HOME` 可以把整个根目录搬到别处（例如另一块盘），五个子目录随之一起搬；请用绝对路径。
+
+| 子目录 | 内容 | 能否删除 |
+|------|------|---------|
+| `cache/` | TIGER-DnR / TIGER-Speech 两个模型的下载快照（约 2 GB，Hugging Face 缓存格式） | 可删，下次用到重新下载 |
+| `models/` | 手动放置的本地模型；当前只探测 `models/Qwen3-ForcedAligner-0.6B/` | 可删，回退为在线仓库 |
+| `logs/` | 会话日志 `cli_<日期>_<时间>_<PID>.log`，每种角色各保留最近 50 份 | 可删 |
+| `config/` | 预留给将来的常驻后端配置，当前为空 | — |
+| `run/` | 运行期临时文件：降噪 / 分轨时的溢出 wav `spill_*/`，任务结束（含取消）自动删除 | 没有任务在跑时可整个删掉；程序被强杀后残留的 `spill_*` 可手动清 |
+
+```powershell
+$env:WRITANSUB_HOME="D:\WritanSubData"
+uv run writansub-cli pipeline video.mp4 --denoise
+```
+
+```cmd
+set WRITANSUB_HOME=D:\WritanSubData
+uv run writansub-cli pipeline video.mp4 --denoise
+```
+
+Whisper、Qwen3、MMS_FA 的权重不归这里管，仍在各自库的默认缓存，见下一节。
+
+---
+
 ## 模型下载
 
 首次运行需要联网下载 AI 模型。下载一次后自动缓存到本地，后续不再重复下载。
@@ -380,11 +407,11 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 |------|------|------|---------|
 | `Systran/faster-whisper-large-v3` | 语音识别 | ~1.5 GB | `~/.cache/huggingface/hub/` |
 | `MMS_FA` (torchaudio 内置) | 强制打轴 | ~1.2 GB | `~/.cache/torch/hub/` |
-| `TIGER-DnR` | 降噪 | ~1 GB | 项目文件夹下的 `cache/` |
-| `TIGER-Speech` | 说话人分轨 | ~1 GB | 项目文件夹下的 `cache/` |
+| `TIGER-DnR` | 降噪 | ~1 GB | 存储根目录下的 `cache/`（默认项目文件夹） |
+| `TIGER-Speech` | 说话人分轨 | ~1 GB | 存储根目录下的 `cache/`（默认项目文件夹） |
 | `Qwen3-ForcedAligner` | 强制打轴（可选） | ~1.2 GB | `~/.cache/huggingface/hub/` |
 
-> `~` 表示用户主目录，Windows 上通常是 `C:\Users\你的用户名`。TIGER 的两个模型不在用户主目录，而是下载到项目文件夹里的 `cache/` 子文件夹。
+> `~` 表示用户主目录，Windows 上通常是 `C:\Users\你的用户名`。TIGER 的两个模型不在用户主目录，而是下载到存储根目录（默认项目文件夹，见[存储布局](#存储布局)）的 `cache/` 子文件夹。
 
 ### 下载方式
 
@@ -402,7 +429,7 @@ $env:HF_ENDPOINT="https://hf-mirror.com"
 uv run writansub-cli pipeline video.mp4
 ```
 
-**方式三：离线下载。** 电脑完全不能联网时，找一台能联网的机器先跑一次让模型下好，然后把 `C:\Users\用户名\.cache\huggingface\hub\`、`~/.cache/torch/hub/`（MMS_FA）复制到目标机器的对应位置；用到降噪或分轨时再把项目文件夹里的 `cache/` 复制到目标机器项目文件夹的同一位置（TIGER 模型）。
+**方式三：离线下载。** 电脑完全不能联网时，找一台能联网的机器先跑一次让模型下好，然后把 `C:\Users\用户名\.cache\huggingface\hub\`、`~/.cache/torch/hub/`（MMS_FA）复制到目标机器的对应位置；用到降噪或分轨时再把存储根目录下的 `cache/` 复制到目标机器的同一位置（TIGER 模型）。
 
 ---
 
@@ -551,7 +578,7 @@ WritanSub/
 ├── writansub/
 │   ├── cli.py                # 命令行入口（writansub-cli）
 │   ├── types.py              # 公共数据类型
-│   ├── paths.py              # 统一路径管理
+│   ├── paths.py              # 统一路径管理（WRITANSUB_HOME 及其子目录）
 │   ├── config.py             # 后处理 / 翻译默认参数
 │   ├── bridge.py             # 进程与模型资源管理（子进程/取消）
 │   ├── logger.py             # 会话日志
@@ -563,6 +590,7 @@ WritanSub/
 │   ├── subtitle/             # 字幕处理（SRT 读写、内嵌字幕提取、参考轴映射、置信度审查）
 │   ├── pipeline/             # 流水线编排
 │   └── vendor/tiger/         # 第三方 TIGER 模型代码
+├── cache/ models/ logs/ config/ run/   # 运行时生成的存储子目录（不入库，见"存储布局"）
 ├── tests/                    # pytest 测试
 ├── docs/                     # 设计与迁移存档
 ├── archive/                  # 已退役代码归档（GUI、打包链、Rust 原生层、TTS）

@@ -56,8 +56,9 @@ def run_pipeline(
     progress: Callable[[float, str], None],
 ) -> None:
     """TIGER → 识别 → 对齐 → 翻译。"""
-    # T17: 溢出目录随任务生灭，取消/异常同走 finally 清除
-    spill_dir = tempfile.mkdtemp(prefix="writansub_spill_") if cfg.tiger_mode else None
+    from writansub.paths import new_spill_dir
+    # T17: 溢出目录随任务生灭，取消/异常同走 finally 清除；T30: 建在存储根 run/ 下
+    spill_dir = new_spill_dir() if cfg.tiger_mode else None
     try:
         _run_pipeline_impl(cfg, log, progress, spill_dir)
     finally:

@@ -30,3 +30,11 @@ def no_charset_normalizer(monkeypatch):
 
     sys.modules.pop("charset_normalizer", None)
     monkeypatch.setattr(builtins, "__import__", block)
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(monkeypatch, tmp_path):
+    """T30：每个测试的 logs/ 与 run/ 都指到 tmp_path，不污染项目目录。只改模块属性、不 reload。"""
+    from writansub import paths
+    monkeypatch.setattr(paths, "LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(paths, "RUN_DIR", str(tmp_path / "run"))

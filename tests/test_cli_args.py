@@ -77,3 +77,24 @@ def test_api_key_abbreviation_matches_logger_assumption():
     assert a.api_key == "sk-1"
     with pytest.raises(SystemExit):
         build_parser().parse_args(["translate", "x.srt", "--api-", "sk-1"])
+
+
+def test_cmd_preprocess_spill_dir_under_run_dir_and_cleaned(registry, monkeypatch):
+    """T30：preprocess 入口的溢出目录建在 paths.RUN_DIR 下，finally 清除。"""
+    import os
+    import writansub.cli as cli
+    import writansub.preprocess.core as ppc
+    from writansub import paths
+    seen = {}
+
+    def fake_dnr(files, spill_dir, **kw):
+        seen["dir"] = spill_dir
+        seen["existed"] = os.path.isdir(spill_dir)
+        return {}
+
+    monkeypatch.setattr(ppc, "run_dnr_batch", fake_dnr)
+    monkeypatch.setattr(cli, "_setup_cancel_handler", lambda: None)
+    cli.cmd_preprocess(build_parser().parse_args(["preprocess", "x.mp4", "--denoise", "--device", "cpu"]))
+    assert seen["existed"]
+    assert os.path.dirname(seen["dir"]) == paths.RUN_DIR
+    assert not os.path.isdir(seen["dir"])

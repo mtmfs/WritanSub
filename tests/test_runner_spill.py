@@ -72,6 +72,8 @@ def test_run_pipeline_cleans_spill_dir_on_cancel(monkeypatch):
         run_pipeline(cfg, lambda m: None, lambda p, m: None)
 
     assert seen["existed"]  # 运行中目录真实存在
+    from writansub import paths
+    assert os.path.dirname(seen["dir"]) == paths.RUN_DIR  # T30：落在存储根 run/ 下（autouse 已指到 tmp），不在系统 Temp
     assert not os.path.isdir(seen["dir"])  # 取消后 finally 已清除
 
 

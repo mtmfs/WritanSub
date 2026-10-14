@@ -212,8 +212,8 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
     ResourceRegistry.instance().reset_controls()
 
     import shutil
-    import tempfile
-    spill_dir = tempfile.mkdtemp(prefix="writansub_spill_")  # T17: 谁入口谁建谁清
+    from writansub.paths import new_spill_dir
+    spill_dir = new_spill_dir()  # T17: 谁入口谁建谁清；T30: 落在存储根 run/ 下
     try:
         total_phases = 2 if do_separate else 1
 
@@ -534,7 +534,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     from writansub.logger import init_session_log, log_exception, log_line, session_log_path
-    init_session_log()
+    init_session_log(role="cli")
     from writansub.network import setup_hf_mirror
     setup_hf_mirror()
     log_line(f"CLI subcommand: {getattr(args, 'command', '?')}")
