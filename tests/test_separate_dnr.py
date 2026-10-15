@@ -54,6 +54,7 @@ def fake_env(monkeypatch):
     model = _FakeDnrModel()
     _fake_model_holder["model"] = model
     monkeypatch.setattr(ppc, "ResourceRegistry", _FakeRegistry)
+    monkeypatch.setattr(ppc, "resolve_model_identity", lambda *a: {"repo": "fake", "revision": "a" * 40})
     return model
 
 
@@ -85,3 +86,14 @@ def test_progress_labels_match_track_count(fake_env):
                      log_callback=msgs.append)
     assert any("(1/1)" in m for m in msgs)
     assert not any("2/" in m or "3/" in m for m in msgs)
+
+
+def test_cached_dialog_export_only_runs_missing_tracks(fake_env, monkeypatch):
+    keys = []
+    monkeypatch.setattr(_FakeReg, "acquire_model", lambda self, name, device, factory: keys.append(name) or 1)
+    identity = {"repo": "fake", "revision": "b" * 40}
+    dialog, effects, music = ppc.separate_dnr(
+        _wave(), 44100, device="cpu", model_identity=identity, tracks=("effects", "music"))
+    assert fake_env.calls == ["SUB_EFFECT", "SUB_MUSIC"]
+    assert dialog is None and effects is not None and music is not None
+    assert keys == ["tiger_dnr:" + "b" * 40]

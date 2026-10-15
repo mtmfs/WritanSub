@@ -55,6 +55,37 @@ def _add_device_arg(p: argparse.ArgumentParser) -> None:
                    help="推理设备 (默认: cuda)")
 
 
+def _cache_gb(value):
+    from writansub.preprocess.cache import capacity_bytes
+    try:
+        capacity_bytes(value)
+        return float(value)
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise argparse.ArgumentTypeError("缓存容量必须为有限正数且至少 1 字节") from exc
+
+
+def _add_cache_args(p: argparse.ArgumentParser) -> None:
+    g = p.add_argument_group("预处理缓存")
+    g.add_argument("--preprocess-cache", action=argparse.BooleanOptionalAction, default=None,
+                   help="复用 TIGER 人声/分轨落盘缓存 (默认开启)")
+    g.add_argument("--preprocess-cache-dir", default=None,
+                   help="缓存目录 (默认: WRITANSUB_HOME/cache/preprocess)")
+    g.add_argument("--preprocess-cache-gb", type=_cache_gb, default=None,
+                   help="缓存容量 GB (默认: 5；活跃音轨可临时超额)")
+
+
+def _resolve_cache(args: argparse.Namespace, file_cfg: dict):
+    from writansub.preprocess.cache import PreprocessCacheOptions, capacity_bytes
+    def value(name, default):
+        cli = getattr(args, name, None)
+        return cli if cli is not None else file_cfg.get(name, default)
+    return PreprocessCacheOptions(
+        enabled=value("preprocess_cache", True),
+        directory=value("preprocess_cache_dir", None),
+        max_bytes=capacity_bytes(value("preprocess_cache_gb", 5)),
+    )
+
+
 def _add_lang_arg(p: argparse.ArgumentParser) -> None:
     p.add_argument("--lang", default="ja",
                    help="识别语言 (默认: ja)")
@@ -168,6 +199,7 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
         tiger_mode=tiger_mode,
         mss_model=args.mss_model,
         save_intermediate=args.save_intermediate,
+        preprocess_cache=_resolve_cache(args, file_cfg),
         overlap_mode=args.overlap_mode,
         ref_srt=args.ref_srt,
         use_ref_sub=args.ref_embedded or args.ref_sub_track is not None,
@@ -199,6 +231,9 @@ def cmd_pipeline(args: argparse.Namespace) -> None:
 def cmd_preprocess(args: argparse.Namespace) -> None:
     from writansub.bridge import ResourceRegistry, CancelledError
     from writansub.preprocess.core import run_dnr_batch, run_speech_batch
+    from writansub.preprocess.cache import CacheSession
+
+    cache_options = _resolve_cache(args, {})
 
     do_separate = args.separate
     if do_separate:
@@ -214,6 +249,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
     import shutil
     from writansub.paths import new_spill_dir
     spill_dir = new_spill_dir()  # T17: 谁入口谁建谁清；T30: 落在存储根 run/ 下
+    cache_session = CacheSession(cache_options, _log)
     try:
         total_phases = 2 if do_separate else 1
 
@@ -227,6 +263,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
             save_intermediate=True,
             mss_model=args.mss_model,
             log_callback=_log, progress_callback=_dnr_p,
+            cache_session=cache_session,
         )
 
         if do_separate and tiger_results:
@@ -239,6 +276,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
                 tiger_results, spill_dir, device=args.device,
                 save_intermediate=True,
                 log_callback=_log, progress_callback=_spk_p,
+                cache_session=cache_session,
             )
 
         _progress_bar(1.0, "完成")
@@ -247,6 +285,7 @@ def cmd_preprocess(args: argparse.Namespace) -> None:
         _log("处理已取消")
         sys.exit(1)
     finally:
+        cache_session.close()
         shutil.rmtree(spill_dir, ignore_errors=True)
 
 
@@ -443,6 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pipe.add_argument("--config", help="JSON 配置文件（覆盖默认参数）")
     _add_lang_arg(p_pipe)
     _add_device_arg(p_pipe)
+    _add_cache_args(p_pipe)
     p_pipe.add_argument("--whisper-model", default="large-v3", help="Whisper 模型 (默认: large-v3)")
     p_pipe.add_argument("--compute-type", default="int8", choices=["int8", "int8_float16", "float16"],
                         help="Whisper 量化档 (默认: int8; CUDA 上 float16 更快更准但更吃显存)")
@@ -482,6 +522,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pre = sub.add_parser("preprocess", help="音频预处理 (降噪 / 说话人分轨)")
     p_pre.add_argument("files", nargs="+", help="媒体文件路径")
     _add_device_arg(p_pre)
+    _add_cache_args(p_pre)
     p_pre.add_argument("--denoise", action="store_true", help="启用 DnR 降噪")
     p_pre.add_argument("--separate", action="store_true", help="启用说话人分离 (含降噪)")
     p_pre.add_argument("--mss-model", default="tiger-dnr", help="降噪模型 (默认: tiger-dnr)")
@@ -525,6 +566,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_tl.add_argument("--bilingual", action="store_true", help="双语输出 (原文+译文)")
     _add_translate_args(p_tl)
     p_tl.set_defaults(func=cmd_translate)
+
+    for child in (p_pipe, p_pre, p_tr, p_al, p_tl):
+        child.add_argument("--version", action="version", version=f"WritanSub {__version__}")
 
     return parser
 

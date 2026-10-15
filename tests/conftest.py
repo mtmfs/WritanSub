@@ -34,7 +34,9 @@ def no_charset_normalizer(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_home(monkeypatch, tmp_path):
-    """T30：每个测试的 logs/ 与 run/ 都指到 tmp_path，不污染项目目录。只改模块属性、不 reload。"""
+    """T41：存储根与所有五个子目录隔离，避免模型测试创建项目 cache/。"""
     from writansub import paths
-    monkeypatch.setattr(paths, "LOG_DIR", str(tmp_path / "logs"))
-    monkeypatch.setattr(paths, "RUN_DIR", str(tmp_path / "run"))
+    monkeypatch.setattr(paths, "HOME_DIR", str(tmp_path))
+    for attr, subdir in (("CACHE_DIR", "cache"), ("MODELS_DIR", "models"), ("LOG_DIR", "logs"),
+                         ("CONFIG_DIR", "config"), ("RUN_DIR", "run")):
+        monkeypatch.setattr(paths, attr, str(tmp_path / subdir))

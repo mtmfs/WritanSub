@@ -61,7 +61,7 @@ def test_transcribe_single_loads_spk_paths_for_overlap(registry, tmp_path):
 def test_run_pipeline_cleans_spill_dir_on_cancel(monkeypatch):
     seen = {}
 
-    def fake_impl(cfg, log, progress, spill_dir):
+    def fake_impl(cfg, log, progress, spill_dir, **kwargs):
         seen["dir"] = spill_dir
         seen["existed"] = spill_dir is not None and os.path.isdir(spill_dir)
         raise CancelledError("任务已取消")
@@ -80,7 +80,7 @@ def test_run_pipeline_cleans_spill_dir_on_cancel(monkeypatch):
 def test_run_pipeline_no_spill_dir_without_tiger(monkeypatch):
     seen = {}
 
-    def fake_impl(cfg, log, progress, spill_dir):
+    def fake_impl(cfg, log, progress, spill_dir, **kwargs):
         seen["dir"] = spill_dir
 
     monkeypatch.setattr(runner, "_run_pipeline_impl", fake_impl)

@@ -183,6 +183,9 @@ writansub-cli pipeline video.mkv --ref-sub-track 0
 | `--separate` | 启用说话人分离（含降噪） | 不启用 |
 | `--mss-model` | 降噪模型 (`tiger-dnr`/`htdemucs_ft`/`htdemucs`) | `tiger-dnr` |
 | `--save-intermediate` | 保存中间音轨 | 不保存 |
+| `--preprocess-cache` / `--no-preprocess-cache` | 开启 / 关闭 TIGER 人声与分轨持久缓存 | 开启 |
+| `--preprocess-cache-dir` | 音轨缓存目录 | `<WRITANSUB_HOME>/cache/preprocess/` |
+| `--preprocess-cache-gb` | 音轨缓存容量，单位 GB（十进制）；使用中的条目允许暂时超额 | `5` |
 | `--overlap-mode` | `--separate` 时两人同时说话的处理：`merge` 压成一句（`- 甲` / `- 乙`），`keep` 保留两条重叠字幕 | `merge` |
 | `--ref-srt` | 外部参考 SRT | 无 |
 | `--ref-embedded` | 参考视频内嵌字幕，按识别语言自动选轨 | 不启用 |
@@ -210,7 +213,22 @@ writansub-cli preprocess video.mp4 --separate
 writansub-cli preprocess a.mp4 b.mp4 --separate --device cuda
 ```
 
-必须指定 `--denoise` 或 `--separate` 至少一个，`--separate` 隐含 `--denoise`。输出在原文件同目录，文件名带 `_dnr`（降噪后）或 `_speech`（分轨后）。
+必须指定 `--denoise` 或 `--separate` 至少一个，`--separate` 隐含 `--denoise`。输出在原文件同目录：`<base>_dialog.wav`、`<base>_effects.wav`、`<base>_music.wav`，分轨时另有 `<base>_spk1.wav`、`<base>_spk2.wav`。
+
+`pipeline` 和 `preprocess` 默认复用 TIGER 人声与分轨缓存。先跑降噪、再加 `--separate` 时可复用已有的人声；完全命中时不再执行对应 TIGER 推理，但分轨仍重新进行 VAD 检测。`preprocess` 总是导出伴奏、音效，`pipeline --save-intermediate` 也需要这两条音轨，它们不缓存，因此命中人声后仍会补算伴奏、音效。Demucs 不参与此缓存。
+
+两个命令均支持上述三个缓存参数。例如：
+
+```bash
+# 重跑字幕时自动复用降噪结果
+writansub-cli pipeline video.mp4 --denoise
+# 一次性关闭持久缓存，按原来的临时文件方式处理
+writansub-cli pipeline video.mp4 --denoise --no-preprocess-cache
+# 自定义音轨缓存位置及容量
+writansub-cli preprocess video.mp4 --separate --preprocess-cache-dir D:/audio-cache --preprocess-cache-gb 8
+```
+
+`pipeline --config` 支持 `preprocess_cache`（布尔值）、`preprocess_cache_dir`（路径）、`preprocess_cache_gb`（有限正数）；优先级为命令行 > JSON > 默认值。更改媒体路径、大小、修改时间、模型快照或相关算法代码会使已有结果失效。媒体不做整文件哈希；若手工替换内容并保留大小和修改时间，应先在无任务运行时删除对应音轨缓存。
 
 ### 3. transcribe — 语音识别
 
@@ -377,7 +395,7 @@ writansub-cli pipeline video.mp4 --config myconfig.json --translate --review
 
 | 子目录 | 内容 | 能否删除 |
 |------|------|---------|
-| `cache/` | TIGER-DnR / TIGER-Speech 两个模型的下载快照（约 2 GB，Hugging Face 缓存格式） | 可删，下次用到重新下载 |
+| `cache/` | TIGER-DnR / TIGER-Speech 模型下载快照，以及 `preprocess/` 下的人声与分轨缓存 | 没有任务运行时可删；模型会重新下载，音轨会重新计算 |
 | `models/` | 手动放置的本地模型；当前只探测 `models/Qwen3-ForcedAligner-0.6B/` | 可删，回退为在线仓库 |
 | `logs/` | 会话日志 `cli_<日期>_<时间>_<PID>.log`，每种角色各保留最近 50 份 | 可删 |
 | `config/` | 预留给将来的常驻后端配置，当前为空 | — |
@@ -394,6 +412,8 @@ uv run writansub-cli pipeline video.mp4 --denoise
 ```
 
 Whisper、Qwen3、MMS_FA 的权重不归这里管，仍在各自库的默认缓存，见下一节。
+
+音轨缓存默认保留最多 5,000,000,000 字节，按最近使用时间清理，容量不包含模型权重。当前任务或其他 CLI 正在使用的条目会保护到任务结束，必要时暂时超过上限。程序正常结束或取消后释放保护并清理；被强杀的会话和未完成写入在下次访问缓存时回收。缓存损坏按未命中重新计算，目录或写入不可用时告警并回退 `run/` 临时文件。首次写入会短暂同时占用临时文件和缓存副本；空闲时可手工删除 `cache/preprocess/`，不必删除模型快照。
 
 ---
 

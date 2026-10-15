@@ -13,6 +13,7 @@ from writansub.transcribe.base import Recognizer, is_aligned, to_subs
 from writansub.transcribe.whisper import WhisperRecognizer
 from writansub.translate.core import translate_subs
 from writansub.align.core import load_audio, run_alignment, post_process, init_model
+from writansub.preprocess.cache import CacheSession, PreprocessCacheOptions
 
 
 @dataclass
@@ -26,6 +27,7 @@ class PipelineConfig:
     mss_model: str = "tiger-dnr"
     overlap_mode: str = "merge"         # separate 模式重叠: merge=压成一句 / keep=保留双条
     save_intermediate: bool = False
+    preprocess_cache: PreprocessCacheOptions = field(default_factory=PreprocessCacheOptions)
     keep_asr_srt: bool = False
     keep_aligned_srt: bool = False
     generate_review: bool = False
@@ -60,7 +62,8 @@ def run_pipeline(
     # T17: 溢出目录随任务生灭，取消/异常同走 finally 清除；T30: 建在存储根 run/ 下
     spill_dir = new_spill_dir() if cfg.tiger_mode else None
     try:
-        _run_pipeline_impl(cfg, log, progress, spill_dir)
+        with CacheSession(cfg.preprocess_cache, log) as cache_session:
+            _run_pipeline_impl(cfg, log, progress, spill_dir, cache_session=cache_session)
     finally:
         if spill_dir:
             shutil.rmtree(spill_dir, ignore_errors=True)
@@ -71,6 +74,7 @@ def _run_pipeline_impl(
     log: Callable[[str], None],
     progress: Callable[[float, str], None],
     spill_dir: str | None,
+    cache_session: CacheSession | None = None,
 ) -> None:
     reg = ResourceRegistry.instance()
 
@@ -100,7 +104,7 @@ def _run_pipeline_impl(
     # Phase: TIGER 增强
     if cfg.tiger_mode and not _cancelled():
         tiger_results = _run_tiger_phase(
-            cfg, num_phases, log, progress, _cancelled, spill_dir,
+            cfg, num_phases, log, progress, _cancelled, spill_dir, cache_session,
         )
 
     # Phase: 语音识别
@@ -354,6 +358,7 @@ def _run_tiger_phase(
     progress: Callable[[float, str], None],
     cancelled: Callable[[], bool],
     spill_dir: str,
+    cache_session: CacheSession | None = None,
 ) -> dict:
     log(f">>> Phase 1/{num_phases}: TIGER 增强")
     from writansub.preprocess.core import run_dnr_batch, run_speech_batch
@@ -368,6 +373,7 @@ def _run_tiger_phase(
         cfg.media_files, spill_dir, device=cfg.device, save_intermediate=cfg.save_intermediate,
         mss_model=cfg.mss_model,
         log_callback=log, progress_callback=_dnr_p,
+        cache_session=cache_session,
     )
 
     if do_speech and tiger_results and not cancelled():
@@ -377,6 +383,7 @@ def _run_tiger_phase(
         run_speech_batch(
             tiger_results, spill_dir, device=cfg.device, save_intermediate=cfg.save_intermediate,
             log_callback=log, progress_callback=_spk_p,
+            cache_session=cache_session,
         )
 
     return tiger_results

@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shutil
 import wave
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -8,6 +9,8 @@ import torch
 import torchaudio.transforms as T
 
 from writansub.bridge import ResourceRegistry
+from writansub.preprocess.cache import CacheSession, media_fingerprint
+from writansub.preprocess.identity import DNR_REPO, SPEECH_REPO, local_model_identity, resolve_model_identity
 
 
 @dataclass
@@ -48,7 +51,7 @@ def _media_key(media: str) -> str:
 
 
 def spill_wav(waveform: torch.Tensor, sr: int, spill_dir: str, media: str, kind: str) -> str:
-    """波形落盘到溢出目录并返回路径（T17 唯一写入点；T41 换成持久缓存目录即成缓存）。"""
+    """T17 临时音轨写入；T41 通过 CacheSession 校验身份并发布完整缓存条目。"""
     path = os.path.join(spill_dir, f"{_media_key(media)}_{kind}.wav")
     save_wav(waveform, path, sr)
     return path
@@ -62,39 +65,46 @@ def _hf_model_cached(cache_dir: str, repo_id: str) -> bool:
     return any(os.scandir(snap_dir))
 
 
-def _from_pretrained_cached(cls: Any, repo_id: str, cache_dir: str, device: str) -> Any:
+def _from_pretrained_cached(cls: Any, repo_id: str, cache_dir: str, device: str, revision: str | None = None) -> Any:
     """缓存命中时先离线加载；半截缓存加载失败则降级联网重试，避免把用户锁死在离线模式。
 
     .to(device) 保持在 try 之外：显存不足/驱动错误应原样抛出，而不是被误诊为缓存损坏。
     """
     model = None
+    kwargs = {"revision": revision} if revision else {}
     if _hf_model_cached(cache_dir, repo_id):
         try:
             model = cls.from_pretrained(
-                repo_id, cache_dir=cache_dir, local_files_only=True,
+                repo_id, cache_dir=cache_dir, local_files_only=True, **kwargs,
             )
         except Exception as e:
             from writansub.logger import log_line
             log_line(f"[model] {repo_id} 本地缓存加载失败 ({e!r})，转为联网重试")
     if model is None:
-        model = cls.from_pretrained(repo_id, cache_dir=cache_dir)
+        model = cls.from_pretrained(repo_id, cache_dir=cache_dir, **kwargs)
     return model.to(device).eval()
 
 
-def _load_dnr_model(device: str, cache_dir: str = "") -> Any:
+def _load_dnr_model(device: str, cache_dir: str = "", model_identity: dict | None = None) -> Any:
     from writansub.vendor.tiger import TIGERDNR
     from writansub.paths import CACHE_DIR
     cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
-    return _from_pretrained_cached(TIGERDNR, "JusperLee/TIGER-DnR", cache_dir, device)
+    identity = model_identity or resolve_model_identity(DNR_REPO, cache_dir)
+    model = _from_pretrained_cached(TIGERDNR, DNR_REPO, cache_dir, device, identity["revision"])
+    model._writansub_identity = identity
+    return model
 
 
-def _load_speech_model(device: str, cache_dir: str = "") -> Any:
+def _load_speech_model(device: str, cache_dir: str = "", model_identity: dict | None = None) -> Any:
     from writansub.vendor.tiger import TIGER
     from writansub.paths import CACHE_DIR
     cache_dir = cache_dir or CACHE_DIR
     os.makedirs(cache_dir, exist_ok=True)
-    return _from_pretrained_cached(TIGER, "JusperLee/TIGER-speech", cache_dir, device)
+    identity = model_identity or resolve_model_identity(SPEECH_REPO, cache_dir)
+    model = _from_pretrained_cached(TIGER, SPEECH_REPO, cache_dir, device, identity["revision"])
+    model._writansub_identity = identity
+    return model
 
 
 def separate_dnr_demucs(
@@ -160,13 +170,17 @@ def separate_dnr(
     full_tracks: bool = True,
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
-) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    *,
+    model_identity: dict | None = None,
+    tracks: tuple[str, ...] | None = None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
     """TIGER-DnR 分离。full_tracks=False 时只跑人声子模型（流水线只消费人声，
     跳过音效/伴奏两遍全长推理约 3 倍提速），effects/music 返回 None。"""
     _log = log_callback or (lambda msg: None)
     _progress = progress_callback or (lambda pct, msg: None)
 
     reg = ResourceRegistry.instance()
+    identity = model_identity or resolve_model_identity(DNR_REPO, cache_dir)
 
     dnr_sr = 44100
     if sr != dnr_sr:
@@ -174,31 +188,33 @@ def separate_dnr(
 
     def _factory() -> Any:
         _log("加载 TIGER-DnR 模型...")
-        return _load_dnr_model(device, cache_dir)
+        return _load_dnr_model(device, cache_dir, identity)
 
-    h = reg.acquire_model("tiger_dnr", device, _factory)
+    key = f"tiger_dnr:{identity['revision']}"
+    h = reg.acquire_model(key, device, _factory)
     model = reg.get_model(h)
+    if model_identity is not None:
+        model_identity.update(getattr(model, "_writansub_identity", None) or identity or {})
 
     # 每条轨道：(子模型, 显示名称, wav_chunk_inference 输出索引)
-    tracks = [(model.dialog, "人声", 2)]
-    if full_tracks:
-        tracks += [(model.effect, "音效", 1), (model.music, "伴奏", 0)]
+    names = tracks if tracks is not None else (("dialog", "effects", "music") if full_tracks else ("dialog",))
+    definitions = {"dialog": (model.dialog, "人声", 2),
+                   "effects": (model.effect, "音效", 1), "music": (model.music, "伴奏", 0)}
 
     mixture = waveform.unsqueeze(0).to(device)  # [1, 1, T]
-    results = []
+    results = {}
     try:
-        for i, (sub_model, name, idx) in enumerate(tracks):
+        for i, track_name in enumerate(names):
+            sub_model, name, idx = definitions[track_name]
             reg.checkpoint()
-            _log(f"正在分离 {name} ({i + 1}/{len(tracks)}) ...")
-            _progress(i / len(tracks), f"正在分离 {name}...")
+            _log(f"正在分离 {name} ({i + 1}/{len(names)}) ...")
+            _progress(i / len(names), f"正在分离 {name}...")
             track = model.wav_chunk_inference(sub_model, mixture)[idx]
-            results.append(track.cpu())
+            results[track_name] = track.cpu()
     finally:
         reg.release_model(h)
 
-    dialog = results[0]
-    effects, music = (results[1], results[2]) if full_tracks else (None, None)
-    return dialog, effects, music
+    return results.get("dialog"), results.get("effects"), results.get("music")
 
 
 def _chunk_inference(
@@ -259,10 +275,13 @@ def separate_speakers(
     device: str = "cpu",
     cache_dir: str = "",
     log_callback: Callable[[str], None] | None = None,
+    *,
+    model_identity: dict | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     _log = log_callback or (lambda msg: None)
 
     reg = ResourceRegistry.instance()
+    identity = model_identity or resolve_model_identity(SPEECH_REPO, cache_dir)
 
     speech_sr = 16000
     wav = T.Resample(dialog_sr, speech_sr)(dialog_wav)
@@ -271,10 +290,13 @@ def separate_speakers(
 
     def _factory() -> Any:
         _log("加载 TIGER-Speech 模型...")
-        return _load_speech_model(device, cache_dir)
+        return _load_speech_model(device, cache_dir, identity)
 
-    h = reg.acquire_model("tiger_speech", device, _factory)
+    key = f"tiger_speech:{identity['revision']}"
+    h = reg.acquire_model(key, device, _factory)
     model = reg.get_model(h)
+    if model_identity is not None:
+        model_identity.update(getattr(model, "_writansub_identity", None) or identity or {})
 
     try:
         _log("正在进行说话人分离...")
@@ -370,47 +392,77 @@ def run_dnr_batch(
     mss_model: str = "tiger-dnr",
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
+    cache_session: CacheSession | None = None,
 ) -> dict:
     _log = log_callback or (lambda msg: None)
 
     reg = ResourceRegistry.instance()
     results = {}
     total = len(media_files)
+    use_cache = cache_session is not None and cache_session.enabled and not mss_model.startswith("htdemucs")
 
     for idx, media in enumerate(media_files):
         reg.checkpoint()
         file_info = f"[{idx + 1}/{total}]"
         _file_progress = _make_file_progress(idx, total, progress_callback)
 
-        _file_progress(0.0, f"{file_info} 正在加载音频...")
-        waveform, sr = ResourceRegistry.instance().decode_audio(media, sample_rate=44100)
-
         _sub_progress = lambda pct, msg, _fp=_file_progress, _fi=file_info: _fp(pct, f"{_fi} {msg}")
-
-        if mss_model.startswith("htdemucs"):
-            dialog, effects, music = separate_dnr_demucs(
-                waveform, sr, device=device, model_name=mss_model,
-                log_callback=_log, progress_callback=_sub_progress,
-            )
+        source = media_fingerprint(media) if use_cache else None
+        model_identity = (local_model_identity(DNR_REPO, cache_dir) or {}) if use_cache else None
+        identity = cache_session.identity(media, "dnr", model_identity, device) if use_cache and model_identity else None
+        if identity is not None:
+            identity["source"] = source
+        hit = cache_session.lookup(identity) if use_cache else None
+        effects = music = dialog = None
+        if hit is None or save_intermediate:
+            _file_progress(0.0, f"{file_info} 正在加载音频...")
+            waveform, sr = reg.decode_audio(media, sample_rate=44100)
+            if mss_model.startswith("htdemucs"):
+                dialog, effects, music = separate_dnr_demucs(
+                    waveform, sr, device=device, model_name=mss_model,
+                    log_callback=_log, progress_callback=_sub_progress,
+                )
+            else:
+                extra = {"model_identity": model_identity} if use_cache else {}
+                if hit:
+                    extra["tracks"] = ("effects", "music")
+                dialog, effects, music = separate_dnr(
+                    waveform, sr, device=device, cache_dir=cache_dir,
+                    full_tracks=save_intermediate,
+                    log_callback=_log, progress_callback=_sub_progress, **extra,
+                )
+            del waveform
+        if hit:
+            dialog_path = hit["dialog"]
         else:
-            dialog, effects, music = separate_dnr(
-                waveform, sr, device=device, cache_dir=cache_dir,
-                full_tracks=save_intermediate,
-                log_callback=_log, progress_callback=_sub_progress,
-            )
-
+            dialog_path = spill_wav(dialog, 44100, spill_dir, media, "dialog")
+            if use_cache and model_identity:
+                identity = cache_session.identity(media, "dnr", model_identity, device)
+                if identity is not None:
+                    identity["source"] = source  # Fingerprint from before decoding/inference.
+                published = cache_session.publish(identity, {"dialog": dialog_path})
+                if published["dialog"] != dialog_path:
+                    os.unlink(dialog_path)
+                dialog_path = published["dialog"]
+        reg.checkpoint()
         if save_intermediate:
             out_dir = os.path.dirname(media)
             bname = os.path.splitext(os.path.basename(media))[0]
-            for name, track in [("dialog", dialog), ("effects", effects), ("music", music)]:
+            shutil.copyfile(dialog_path, os.path.join(out_dir, f"{bname}_dialog.wav"))
+            for name, track in [("effects", effects), ("music", music)]:
                 save_wav(track, os.path.join(out_dir, f"{bname}_{name}.wav"), 44100)
 
         # T17: 波形即分即落盘，results 只存路径——批处理 N 个文件不再全量驻留内存
         results[media] = {
-            "dialog_path": spill_wav(dialog, 44100, spill_dir, media, "dialog"),
+            "dialog_path": dialog_path,
             "dialog_sr": 44100,
         }
+        if identity is not None:
+            results[media]["cache_identity"] = identity
+        if mss_model.startswith("htdemucs"):
+            results[media]["dnr_backend"] = "demucs"
         del dialog, effects, music  # 防上一文件的波形活到下一文件分离完成
+        _file_progress(1.0, f"{file_info} 人声就绪")
 
     return results
 
@@ -423,6 +475,7 @@ def run_speech_batch(
     save_intermediate: bool = False,
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[float, str], None] | None = None,
+    cache_session: CacheSession | None = None,
 ) -> None:
     _log = log_callback or (lambda msg: None)
 
@@ -434,26 +487,53 @@ def run_speech_batch(
         reg.checkpoint()
         data = dnr_results[media]
         _file_progress = _make_file_progress(idx, total, progress_callback)
+        legacy_vad = data.get("dnr_backend") == "demucs"
 
-        _file_progress(0.0, "正在分离说话人...")
-        dialog, dialog_sr = load_wav(data["dialog_path"])
-        spk1, spk2 = separate_speakers(
-            dialog, dialog_sr, device=device, cache_dir=cache_dir, log_callback=_log,
-        )
-        del dialog
-
+        upstream = data.get("cache_identity")
+        use_cache = cache_session is not None and cache_session.enabled and upstream is not None
+        model_identity = (local_model_identity(SPEECH_REPO, cache_dir) or {}) if use_cache else None
+        identity = cache_session.identity(media, "speech", model_identity, device, upstream) if use_cache and model_identity else None
+        if identity is not None:
+            identity["source"] = upstream["source"]
+        hit = cache_session.lookup(identity) if use_cache else None
+        if hit is None:
+            _file_progress(0.0, "正在分离说话人...")
+            dialog, dialog_sr = load_wav(data["dialog_path"])
+            extra = {"model_identity": model_identity} if use_cache else {}
+            spk1, spk2 = separate_speakers(
+                dialog, dialog_sr, device=device, cache_dir=cache_dir, log_callback=_log, **extra,
+            )
+            del dialog
+            hit = {"spk1": spill_wav(spk1, 16000, spill_dir, media, "spk1"),
+                   "spk2": spill_wav(spk2, 16000, spill_dir, media, "spk2")}
+            if not legacy_vad:
+                del spk1, spk2
+            if use_cache and model_identity:
+                identity = cache_session.identity(media, "speech", model_identity, device, upstream)
+                if identity is not None:
+                    identity["source"] = upstream["source"]
+                published = cache_session.publish(identity, hit)
+                for name, old_path in hit.items():
+                    if old_path != published[name]:
+                        os.unlink(old_path)
+                hit = published
+        reg.checkpoint()
         if save_intermediate:
             out_dir = os.path.dirname(media)
             bname = os.path.splitext(os.path.basename(media))[0]
-            save_wav(spk1, os.path.join(out_dir, f"{bname}_spk1.wav"), 16000)
-            save_wav(spk2, os.path.join(out_dir, f"{bname}_spk2.wav"), 16000)
+            for name, path in hit.items():
+                shutil.copyfile(path, os.path.join(out_dir, f"{bname}_{name}.wav"))
 
         _file_progress(0.7, "正在进行 VAD 检测...")
+        # TIGER cold/warm paths use identical PCM16 samples; Demucs keeps its old input precision.
+        if not legacy_vad:
+            spk1 = load_wav(hit["spk1"])[0]
+            spk2 = load_wav(hit["spk2"])[0]
         overlaps, overlap_ratio = detect_overlaps(spk1, spk2, sr=16000, log_callback=_log)
 
         data.update({
-            "spk1_path": spill_wav(spk1, 16000, spill_dir, media, "spk1"),
-            "spk2_path": spill_wav(spk2, 16000, spill_dir, media, "spk2"),
+            "spk1_path": hit["spk1"],
+            "spk2_path": hit["spk2"],
             "spk_sr": 16000,
             "overlap_regions": overlaps,
             "overlap_ratio": overlap_ratio,

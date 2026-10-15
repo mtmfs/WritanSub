@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/lang/zh-CN/
 
 ## [Unreleased]
 
+### Added
+- **T41 预处理音轨持久缓存**：`pipeline` / `preprocess` 默认复用 TIGER 人声和两条分轨，降噪与分轨分别缓存；默认位于 `WRITANSUB_HOME/cache/preprocess/`，5 GB LRU 容量，活跃任务可临时超额。新增 `--preprocess-cache` / `--no-preprocess-cache`、`--preprocess-cache-dir`、`--preprocess-cache-gb`，pipeline JSON 支持同名下划线配置键。文件指纹、HF 快照、相关代码及 torch/torchaudio 版本参与失效；跨进程租约保护使用中的文件，完整条目原子发布，强杀半成品下次维护回收，缓存失败回退临时文件。伴奏/音效不缓存，导出时只补算缺少的轨道；Demucs 保持原路径。TIGER 分轨 VAD 统一读取落盘 PCM，使冷、热路径输入一致。
+- 各 CLI 子命令支持 `--version`；根命令与子命令的 `--help` / `--version` 均不创建存储目录或日志。
+
 ### Changed
 - **听写后端接口化**：新增 `Recognizer` 协议与 `Transcript` / `Segment` 类型，faster-whisper 收进 `transcribe/whisper.py` 适配器；`PipelineConfig` 以 `asr` 字段持有识别器，runner 与 CLI 不再直接引用 Whisper 参数、缓存键和产物命名。CLI 旗标、产物文件名、模型缓存键均不变。`WordInfo` 新增可选词时间 start/end，probability 允许为空，review 跳过无概率的词。GUI 随后整体删除，见 Removed。
 - **实验性 Qwen3-ASR 后端**：`transcribe/qwen.py` 以 Qwen3-ASR-1.7B 识别、项目已用的 Qwen3-ForcedAligner-0.6B 出词时间，`transcribe/segment.py` 按句末标点与长停顿切成字幕条（标点从全文对回对齐器输出的 token）；超长段在词边界里按停顿时长、顿号、两半均衡打分选切点，不在助词或助动词前切。对齐器给出的单词时长超过 `max_word_seconds`（默认 3 s）即截断，避免配乐段里几个字的字幕条拖到二十多秒。尚未接入 CLI，仅供 `PipelineConfig(asr=QwenRecognizer())` 或脚本调用对比。
